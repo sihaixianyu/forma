@@ -1,0 +1,15 @@
+# Rust build and profiling output
+/target/
+*.rs.bk
+*.profraw
+*.profdata
+
+# Local system and editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Intermediate UI captures (keep exported PNG screenshots)
+/docs/screenshots/*.ppm
