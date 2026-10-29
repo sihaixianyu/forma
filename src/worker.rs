@@ -1,36 +1,93 @@
 use eframe::egui;
 use std::sync::mpsc;
+#[cfg(not(target_arch = "wasm32"))]
+use web_time::Instant;
+
+#[cfg(not(target_arch = "wasm32"))]
+struct Queued<T> {
+    value: T,
+    id: usize,
+    enqueued: Option<Instant>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T> Queued<T> {
+    fn new(value: T) -> Self {
+        Self {
+            value,
+            id: json_lens::diagnostics::next_job(),
+            enqueued: log::log_enabled!(target: "json_lens", log::Level::Debug).then(Instant::now),
+        }
+    }
+
+    fn run<R>(self, process: impl FnOnce(T) -> R) -> R {
+        json_lens::diagnostics::in_job(self.id, || {
+            if let Some(enqueued) = self.enqueued {
+                log::debug!(target: "json_lens", "event=job_dequeued queue_ms={:.3}", enqueued.elapsed().as_secs_f64()*1000.0);
+            }
+            let _stage = json_lens::diagnostics::Stage::new("worker_job", 0);
+            process(self.value)
+        })
+    }
+}
 
 /// Native threads and browser-local tasks share the same non-blocking mailbox API.
 pub struct Sender<T> {
     #[cfg(not(target_arch = "wasm32"))]
-    inner: mpsc::Sender<T>,
+    inner: Channel<T>,
     #[cfg(target_arch = "wasm32")]
-    submit: std::rc::Rc<dyn Fn(T)>,
+    pub(super) submit: std::rc::Rc<dyn Fn(T) -> Result<(), mpsc::SendError<T>>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum Channel<T> {
+    Queued(mpsc::Sender<Queued<T>>),
+    #[cfg(test)]
+    Direct(mpsc::Sender<T>),
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+impl<T> From<mpsc::Sender<T>> for Sender<T> {
+    fn from(sender: mpsc::Sender<T>) -> Self {
+        Self {
+            inner: Channel::Direct(sender),
+        }
+    }
 }
 
 impl<T> Sender<T> {
     pub fn send(&self, value: T) -> Result<(), mpsc::SendError<T>> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.inner.send(value)
+            match &self.inner {
+                Channel::Queued(sender) => sender
+                    .send(Queued::new(value))
+                    .map_err(|error| mpsc::SendError(error.0.value)),
+                #[cfg(test)]
+                Channel::Direct(sender) => sender.send(value),
+            }
         }
         #[cfg(target_arch = "wasm32")]
         {
-            (self.submit)(value);
-            Ok(())
+            (self.submit)(value)
         }
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<T> From<mpsc::Sender<T>> for Sender<T> {
-    fn from(inner: mpsc::Sender<T>) -> Self {
-        Self { inner }
-    }
+pub trait Task<R>: Send + 'static {}
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Send + 'static, R> Task<R> for T {}
+
+#[cfg(target_arch = "wasm32")]
+pub trait Task<R>: Send + 'static {
+    const KIND: &'static str;
+    fn encode(&self, force: bool) -> Result<Vec<u8>, String>;
+    fn decode(self, bytes: &[u8]) -> R;
+    fn failed(self, error: String) -> R;
 }
 
-pub fn spawn<T: Send + 'static, R: Send + 'static>(
+pub fn spawn<T: Task<R>, R: Send + 'static>(
     ctx: egui::Context,
     results: mpsc::Sender<R>,
     coalesce: bool,
@@ -38,79 +95,30 @@ pub fn spawn<T: Send + 'static, R: Send + 'static>(
 ) -> Sender<T> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel::<Queued<T>>();
         std::thread::spawn(move || {
             for mut request in &receiver {
                 if coalesce {
                     while let Ok(newer) = receiver.try_recv() {
+                        log::debug!(target: "json_lens", "event=job_coalesced dropped_job={} replacement_job={}", request.id, newer.id);
                         request = newer;
                     }
                 }
-                if results.send(process(request)).is_err() {
+                if results.send(request.run(&process)).is_err() {
                     break;
                 }
                 ctx.request_repaint();
             }
         });
-        sender.into()
+        Sender {
+            inner: Channel::Queued(sender),
+        }
     }
     #[cfg(target_arch = "wasm32")]
     {
-        use std::{
-            cell::{Cell, RefCell},
-            collections::VecDeque,
-            rc::Rc,
-        };
-        let queue = Rc::new(RefCell::new(VecDeque::<T>::new()));
-        let running = Rc::new(Cell::new(false));
-        let process = Rc::new(process);
-        Sender {
-            submit: Rc::new(move |request| {
-                if coalesce {
-                    queue.borrow_mut().clear();
-                }
-                queue.borrow_mut().push_back(request);
-                if running.replace(true) {
-                    return;
-                }
-                let (queue, running, process, results, ctx) = (
-                    queue.clone(),
-                    running.clone(),
-                    process.clone(),
-                    results.clone(),
-                    ctx.clone(),
-                );
-                wasm_bindgen_futures::spawn_local(async move {
-                    loop {
-                        // Let browser events and rendering run before the next CPU operation.
-                        yield_to_browser().await;
-                        let request = queue.borrow_mut().pop_front();
-                        let Some(request) = request else {
-                            break;
-                        };
-                        if results.send(process(request)).is_err() {
-                            break;
-                        }
-                        ctx.request_repaint();
-                    }
-                    running.set(false);
-                });
-            }),
-        }
+        let _ = process;
+        crate::web_worker::spawn(ctx, results, coalesce)
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-async fn yield_to_browser() {
-    let promise = js_sys::Promise::new(&mut |resolve, reject| {
-        if let Err(error) = web_sys::window()
-            .unwrap()
-            .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0)
-        {
-            let _ = reject.call1(&wasm_bindgen::JsValue::NULL, &error);
-        }
-    });
-    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
 
 #[cfg(test)]

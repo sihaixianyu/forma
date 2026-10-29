@@ -1,0 +1,8 @@
+{
+  "ticks": 32,
+  "max_gap_ms": 5.9000000059604645,
+  "roundtrip_ms": 163.29999999701977,
+  "input_mib": 20,
+  "cross_origin_isolated": false,
+  "measurement": "Single real-file import smoke check; postMessage to response, excluding UI decoding/rendering"
+}

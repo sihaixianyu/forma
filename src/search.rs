@@ -5,7 +5,7 @@ use std::ops::Range;
 pub const TEXT_LIMIT: usize = 10_000;
 pub const TREE_LIMIT: usize = 1_000;
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct TextMatches {
     pub ranges: Vec<Range<usize>>,
     pub total: usize,
@@ -13,6 +13,7 @@ pub struct TextMatches {
 
 /// Case-sensitive literal search. Ranges use UTF-8 byte offsets into the original source.
 pub fn find_text(text: &str, query: &str) -> TextMatches {
+    let _stage = crate::diagnostics::Stage::new("search_text", text.len());
     let mut result = TextMatches::default();
     if query.is_empty() {
         return result;
@@ -26,12 +27,13 @@ pub fn find_text(text: &str, query: &str) -> TextMatches {
     result
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct TreeHit {
     pub pointer: String,
     pub value: String,
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct TreeMatches {
     pub hits: Vec<TreeHit>,
     pub total: usize,
@@ -39,6 +41,7 @@ pub struct TreeMatches {
 
 /// Search decoded property names and scalar values throughout the validated document.
 pub fn find_tree(value: &Value, query: &str) -> TreeMatches {
+    let _stage = crate::diagnostics::Stage::new("search_tree", 0);
     let mut result = TreeMatches::default();
     if query.is_empty() {
         return result;

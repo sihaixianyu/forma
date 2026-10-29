@@ -2,6 +2,7 @@ use json_lens::{Format, format_document, process};
 use std::{hint::black_box, sync::Arc, time::Instant};
 
 fn main() {
+    json_lens::diagnostics::init();
     let row = r#"{"id":12345678901234567890,"name":"JSON Lens 中文 🚀","active":true,"values":[1,2,3,4]}"#;
     println!("size MiB | operation | median ms | MiB/s");
     for mib in [1, 5, 20] {

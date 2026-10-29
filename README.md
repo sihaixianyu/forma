@@ -1,90 +1,89 @@
 # JSON Lens
 
-A Rust JSON editor for native desktop and WebAssembly, built with egui and wgpu.
+A Rust JSON editor for desktop and browser. Explore JSON as a graph, or paste two
+documents for an automatic, aligned comparison.
+
+[Open web app](https://sihaixianyu.github.io/json-lens/) · [Desktop downloads](https://github.com/sihaixianyu/json-lens/releases)
 
 ## UI
 
-| Graph — default view | Compare — paste a second JSON |
+| Light | Dark |
 | --- | --- |
-| ![Graph](docs/screenshots/graph-bounded.png) | ![Compare](docs/screenshots/compare-aligned.png) |
+| ![Light graph view](docs/screenshots/light.png) | ![Dark graph view](docs/screenshots/dark.png) |
+| ![Light comparison](docs/screenshots/compare-light.png) | ![Dark comparison](docs/screenshots/compare-dark.png) |
 
-Maple Mono CN for JSON code; Inter for interface text and graph headings.
-Follows the system theme by default; click the theme
-button to switch Light / Dark. [Browser UI](docs/screenshots/web.png).
+Inter for UI, Maple Mono CN for code. Follows the system theme by default;
+click **Light / Dark** to override it.
 
-## Features
+## Key features
 
-- **Editor:** syntax highlighting, line numbers, validation, Format, Minify, Sort and Expand nested JSON.
-- **Graph:** bounded pan/zoom, draggable cards, branch folding and layout reset. Arrays show element indexes, value summaries and connections.
-- **Navigation:** click source text to locate its graph node, or graph values to reveal their source.
-- **Compare:** paste on the right for automatic diff highlighting, aligned rows and linked vertical scrolling.
-- **Search:** Ctrl/Cmd + F toggles search in the active pane. Ctrl/Cmd + wheel zooms the graph.
-- **Files:** open JSON/CSV and save JSON. Preserves object key order and number precision.
+- **Automatic comparison:** paste JSON on the right; differences highlight automatically, with aligned rows, fixed gutters and linked scrolling.
+- **Graph ↔ source navigation:** click a value to locate it on either side. Arrays retain indexed element nodes; drag cards, fold branches or reset the bounded canvas.
+- **Fast editing workflow:** Format, Minify, recursive Sort and Expand JSON encoded in strings. **Ctrl/Cmd + S** formats the active editor; **Ctrl/Cmd + Z** undoes, **Ctrl/Cmd + Shift + Z** or **Ctrl/Cmd + Y** redoes. Tab indents with two spaces. **Ctrl/Cmd + F** toggles search; **Ctrl/Cmd + wheel** zooms the graph.
+- **Readable strings:** both editors wrap long lines automatically. Hover encoded strings for Base64, URL, Hex or nested JSON previews without changing the document.
+- **Precise JSON:** preserves object key order and arbitrary-precision numbers. Open JSON/CSV and save JSON; browser files stay local.
+- **Desktop + WebAssembly:** native GPU rendering through wgpu, with WebGPU/WebGL2 in the browser.
 
 ## Performance
 
-Recorded release benchmarks on Apple M4 Pro / macOS; median of 7 runs.
+Same JSON array inputs on Apple M4 Pro / macOS, release Rust 1.95.0 vs Node.js
+26.12.1 (V8), measured on 2026-10-29. Median of 11 runs after 3 warmups; ms.
+Native JSON Lens uses SIMD and a **14-thread Rayon pool** for large arrays;
+JS parsers are single-threaded.
 
-| Input | Parse | Format cached JSON | Minify cached JSON |
-| --- | ---: | ---: | ---: |
-| 1 MiB | 6.16 ms | 1.33 ms | 0.68 ms |
-| 5 MiB | 24.69 ms | 7.49 ms | 4.34 ms |
-| 20 MiB | 98.94 ms | 30.77 ms | 18.11 ms |
+| Input | Original serde parse | JSON Lens parse | JS `JSON.parse` | TS `jsonc-parser` parse | JSON Lens cached format | JS cached format |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 MiB | 5.04 | 1.53 | 1.83 | 16.85 | 1.70 | 2.62 |
+| 5 MiB | 26.95 | 6.00 | 9.30 | 66.13 | 10.09 | 14.72 |
+| 20 MiB | 106.20 | 23.66 | 44.09 | 278.67 | 36.69 | 59.10 |
 
-Native JSON processing runs on background CPU workers; wgpu accelerates rendering.
-These timings measure JSON processing, excluding file I/O and UI rendering.
-The browser version schedules CPU work between frames on the main thread;
-large documents can briefly pause the UI. The table above measures the native build.
+The native parsing path is **3.3–4.5× faster than the original serde path** and
+**1.2–1.9× faster than V8** on these arrays. With one worker, 20 MiB parsing
+is about 78 ms versus 104 ms for serde and 44 ms for V8. The default speedup
+includes parallelism and uses extra temporary memory.
+These measurements exclude file I/O, graph layout and rendering.
+[Methodology, single-thread results and reproduction commands](docs/performance.md).
+
+WASM also uses **Sonic + SIMD128**. In Chrome, 20 MiB parsing dropped from
+**121.8 ms to 92.6 ms** against serde in the same WASM build. JSON processing runs in a background Web Worker. [Browser results](docs/performance.md#webassembly-results).
+
+Native processing uses background threads. In the browser, JSON processing,
+Graph construction, Compare and search run in a Web Worker. The UI stays on
+the main thread; no cross-origin isolation headers are required.
+
+For a **1-million-character JSON** in Chrome, editor optimizations reduced
+median scroll frame gaps from **83 ms to 16.7 ms**, and the largest frame gap
+while opening from **417 ms to 117 ms**. [UI measurements](docs/performance.md#browser-editor-responsiveness).
 
 ## Run
 
 ```sh
 cargo run --release --locked
-```
-
-Pass a file path to open it at startup:
-
-```sh
+# Optional file at startup:
 cargo run --release --locked -- /path/to/document.json
 ```
 
-Browser mode (install [Trunk](https://trunkrs.dev/) first):
+Browser mode, with [Trunk](https://trunkrs.dev/) installed:
 
 ```sh
 rustup target add wasm32-unknown-unknown
 trunk serve --release
 ```
 
-Open **http://127.0.0.1:8080**. Use `trunk build --release` to create a static site
-in `dist/`; serve it over HTTPS or localhost. WebGPU is used when available,
-with WebGL2 as a fallback. Files stay in your browser: Open imports JSON/CSV,
-and Save downloads JSON without uploading it.
+Open **http://127.0.0.1:8080**. `trunk build --release` generates `dist/` for
+HTTPS or localhost hosting. WebGPU falls back to WebGL2 when unavailable.
 
-GitHub Pages: select **Settings → Pages → Source → GitHub Actions** once.
-Pushes to `main` then build and deploy automatically using
-[pages.yml](.github/workflows/pages.yml).
-The site URL is **https://sihaixianyu.github.io/json-lens/**.
-For automatic first-time setup, add a `PAGES_SETUP_TOKEN` repository secret
-(fine-grained PAT with Pages read/write). The default `GITHUB_TOKEN` cannot
-create the Pages site; a 404 from `configure-pages` means setup is still needed.
+DEBUG timing logs: native `JSON_LENS_LOG=debug cargo run --release --locked`;
+web append `?debug=1` and enable **Verbose** in DevTools Console.
+[Log fields and performance analysis](docs/debug.md).
 
-## Desktop releases
+## Releases and deployment
 
-Push a version tag such as `v0.1.0`, or run **Build Release** from Actions.
-The workflow publishes these files to GitHub Releases:
+Version tags such as `v0.1.0` trigger [desktop packaging](.github/workflows/release.yml):
+macOS Apple Silicon/Intel `.dmg`, Windows x86_64 setup/portable `.exe`, and
+Linux x86_64 `.deb`/`.tar.gz` (built on Ubuntu 22.04). Publisher signing and
+macOS notarization are not configured.
 
-| Platform | Packages |
-| --- | --- |
-| macOS, Apple Silicon / Intel | `.dmg` containing `JSON Lens.app` |
-| Windows x86_64 | Setup `.exe` and portable `.exe` |
-| Linux x86_64 | `.deb` for Debian/Ubuntu and portable `.tar.gz` |
-
-Linux binaries are built on Ubuntu 22.04. macOS and Windows packages are
-unsigned; Developer ID notarization and Windows publisher signing are not configured.
-
-Run the benchmarks:
-
-```sh
-cargo bench --bench processing --locked
-cargo bench --bench workspace --locked
-```
+Pushes to `main` trigger [GitHub Pages](.github/workflows/pages.yml). First select
+**Settings → Pages → GitHub Actions**, or configure `PAGES_SETUP_TOKEN` with
+Pages read/write permission for automatic setup.

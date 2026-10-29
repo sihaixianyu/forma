@@ -10,6 +10,8 @@ RequestExecutionLevel user
 ManifestDPIAware true
 
 !define MUI_ABORTWARNING
+!define MUI_ICON "${STAGE}\json-lens.ico"
+!define MUI_UNICON "${STAGE}\json-lens.ico"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\json-lens.exe"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${STAGE}\LICENSE"

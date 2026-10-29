@@ -4,6 +4,20 @@ dist = "dist"
 public_url = "./"
 filehash = true
 locked = true
+pattern_script = """
+<script type="module">
+import init, * as bindings from '{base}{js}';
+window.jsonLensWorkerConfig = {
+  moduleUrl: new URL('{base}{js}', document.baseURI).href,
+  wasmUrl: new URL('{base}{wasm}', document.baseURI).href,
+  workerUrl: new URL('{base}json-lens-worker.js?v={wasm}', document.baseURI).href,
+  debug: new URLSearchParams(location.search).get('debug') === '1'
+};
+window.wasmBindings = bindings;
+const wasm = await init({ module_or_path: '{base}{wasm}' });
+dispatchEvent(new CustomEvent('TrunkApplicationStarted', {detail: { wasm: wasm }}));
+</script>
+"""
 
 [serve]
 addresses = ["127.0.0.1"]

@@ -5,12 +5,15 @@ use std::collections::HashMap;
 pub const NODE_LIMIT: usize = 10_000;
 pub const NODE_WIDTH: f32 = 270.0;
 
+#[derive(serde::Serialize)]
 pub struct Row {
     pub pointer: String,
     pub key: String,
     pub value: String,
     pub kind: &'static str,
+    pub string: Option<String>,
 }
+#[derive(serde::Serialize)]
 pub struct GraphNode {
     pub pointer: String,
     pub title: String,
@@ -22,7 +25,7 @@ pub struct GraphNode {
     pub height: f32,
     pub parent: Option<usize>,
 }
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Graph {
     pub nodes: Vec<GraphNode>,
     pub truncated: bool,
@@ -30,6 +33,72 @@ pub struct Graph {
     children: Vec<Vec<usize>>,
     columns: Vec<Vec<usize>>,
     max_height: f32,
+}
+
+fn known_kind(kind: &str) -> Option<&'static str> {
+    match kind {
+        "object" => Some("object"),
+        "array" => Some("array"),
+        "string" => Some("string"),
+        "number" => Some("number"),
+        "boolean" => Some("boolean"),
+        "null" => Some("null"),
+        _ => None,
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Row {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct Fields {
+            pointer: String,
+            key: String,
+            value: String,
+            kind: String,
+            string: Option<String>,
+        }
+        let fields = Fields::deserialize(de)?;
+        let kind = known_kind(&fields.kind)
+            .ok_or_else(|| serde::de::Error::custom("Unknown graph value kind"))?;
+        Ok(Self {
+            pointer: fields.pointer,
+            key: fields.key,
+            value: fields.value,
+            kind,
+            string: fields.string,
+        })
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for GraphNode {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct Fields {
+            pointer: String,
+            title: String,
+            kind: String,
+            rows: Vec<Row>,
+            count: usize,
+            x: f32,
+            y: f32,
+            height: f32,
+            parent: Option<usize>,
+        }
+        let fields = Fields::deserialize(de)?;
+        let kind = known_kind(&fields.kind)
+            .ok_or_else(|| serde::de::Error::custom("Unknown graph value kind"))?;
+        Ok(Self {
+            pointer: fields.pointer,
+            title: fields.title,
+            kind,
+            rows: fields.rows,
+            count: fields.count,
+            x: fields.x,
+            y: fields.y,
+            height: fields.height,
+            parent: fields.parent,
+        })
+    }
 }
 
 fn kind(value: &Value) -> &'static str {
@@ -45,6 +114,7 @@ fn kind(value: &Value) -> &'static str {
 
 /// Objects and arrays become connected cards, with indexed element rows for arrays.
 pub fn build_graph(value: &Value) -> Graph {
+    let _stage = crate::diagnostics::Stage::new("graph_build", 0);
     fn row_value(value: &Value) -> String {
         if let Value::Array(array) = value {
             let mut parts: Vec<_> = array
@@ -89,6 +159,7 @@ pub fn build_graph(value: &Value) -> Graph {
                     key: preview(key, 60).into(),
                     value: row_value(value),
                     kind: kind(value),
+                    string: value.as_str().map(str::to_owned),
                 })
                 .collect(),
             Value::Array(array) => array
@@ -100,6 +171,7 @@ pub fn build_graph(value: &Value) -> Graph {
                     key: index.to_string(),
                     value: row_value(value),
                     kind: kind(value),
+                    string: value.as_str().map(str::to_owned),
                 })
                 .collect(),
             _ => vec![Row {
@@ -107,6 +179,7 @@ pub fn build_graph(value: &Value) -> Graph {
                 key: "value".into(),
                 value: preview(&summary(value), 100).into(),
                 kind: kind(value),
+                string: value.as_str().map(str::to_owned),
             }],
         };
         let height = 52.0 + 24.0 * count.min(8) as f32 + if count > 8 { 24.0 } else { 0.0 };
@@ -192,6 +265,7 @@ pub fn build_graph(value: &Value) -> Graph {
     for column in &mut graph.columns {
         column.sort_by(|a, b| graph.nodes[*a].y.total_cmp(&graph.nodes[*b].y));
     }
+    log::debug!(target: "json_lens", "event=graph_result nodes={} truncated={}", graph.nodes.len(), graph.truncated);
     graph
 }
 

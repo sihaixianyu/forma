@@ -6,9 +6,10 @@
     <meta name="theme-color" content="#f7f8fc" />
     <title>JSON Lens</title>
     <link data-trunk rel="copy-file" href="packaging/json-lens.svg" />
-    <link rel="icon" type="image/svg+xml" href="json-lens.svg" />
+    <link data-trunk rel="copy-file" href="packaging/json-lens-worker.js" />
+    <link rel="icon" type="image/svg+xml" href="json-lens.svg?v=3" />
     <link data-trunk rel="rust" data-bin="json-lens"
-      data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int" />
+      data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int --enable-simd" />
     <style>
       html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
       body { background: #f7f8fc; color: #343a4d; }

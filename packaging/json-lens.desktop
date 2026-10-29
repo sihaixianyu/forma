@@ -8,3 +8,4 @@ Terminal=false
 Categories=Development;Utility;
 MimeType=application/json;
 StartupNotify=true
+StartupWMClass=json-lens

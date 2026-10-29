@@ -1,6 +1,9 @@
 #[allow(dead_code, unused_imports)]
 #[path = "../src/canvas.rs"]
 mod canvas;
+#[path = "../src/decode_ui.rs"]
+#[allow(dead_code, unused_imports)]
+mod decode_ui;
 use eframe::egui;
 use json_lens::{Format, format_document, graph::build_graph, process, search::find_tree};
 use std::{hint::black_box, sync::Arc, time::Instant};

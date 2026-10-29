@@ -2,14 +2,19 @@ use serde_json::{Map, Value};
 use std::sync::Arc;
 
 pub mod alignment;
+pub mod decode;
+pub mod diagnostics;
 pub mod edit;
 pub mod graph;
+mod parser;
 pub mod search;
+
+pub use parser::parse_json;
 
 pub const EDIT_LIMIT: usize = 1024 * 1024;
 pub const PREVIEW_LIMIT: usize = 16 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Format {
     Keep,
     Pretty,
@@ -25,9 +30,11 @@ pub struct Document {
 }
 
 pub fn process(text: Arc<String>, format: Format) -> Result<Document, String> {
-    let value: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    format_document(
-        &Document {
+    let _stage = diagnostics::Stage::new("process", text.len());
+    log::debug!(target: "json_lens", "event=format_request format={format:?} cached=false");
+    let value = parse_json(&text)?;
+    format_owned(
+        Document {
             text,
             value: Arc::new(value),
         },
@@ -37,15 +44,31 @@ pub fn process(text: Arc<String>, format: Format) -> Result<Document, String> {
 
 // Reuse the validated value when formatting; mutations copy only when it is shared.
 pub fn format_document(document: &Document, format: Format) -> Result<Document, String> {
-    let mut value = document.value.clone();
-    match format {
-        Format::SortAscending => sort(Arc::make_mut(&mut value), false),
-        Format::SortDescending => sort(Arc::make_mut(&mut value), true),
-        Format::Nested => expand_nested(Arc::make_mut(&mut value), 0),
-        _ => {}
+    log::debug!(target: "json_lens", "event=format_request format={format:?} cached=true");
+    format_owned(
+        Document {
+            text: document.text.clone(),
+            value: document.value.clone(),
+        },
+        format,
+    )
+}
+
+fn format_owned(document: Document, format: Format) -> Result<Document, String> {
+    let _stage = diagnostics::Stage::new("format_document", document.text.len());
+    let mut value = document.value;
+    {
+        let _transform = diagnostics::Stage::new("transform", document.text.len());
+        match format {
+            Format::SortAscending => sort(Arc::make_mut(&mut value), false),
+            Format::SortDescending => sort(Arc::make_mut(&mut value), true),
+            Format::Nested => expand_nested(Arc::make_mut(&mut value), 0),
+            _ => {}
+        }
     }
+    let _serialize = diagnostics::Stage::new("serialize", document.text.len());
     let text = match format {
-        Format::Keep => document.text.clone(),
+        Format::Keep => document.text,
         Format::Compact => Arc::new(serde_json::to_string(&*value).map_err(|e| e.to_string())?),
         _ => Arc::new(serde_json::to_string_pretty(&*value).map_err(|e| e.to_string())?),
     };
@@ -140,6 +163,7 @@ pub fn csv_to_json(text: &str) -> Result<Value, String> {
     Ok(Value::Array(rows))
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Difference {
     pub pointer: String,
     pub left: String,

@@ -1,6 +1,6 @@
 use eframe::egui;
+use json_lens::Document;
 use json_lens::search::{TextMatches, TreeMatches, find_text, find_tree};
-use serde_json::Value;
 use std::{
     sync::{Arc, mpsc},
     time::Duration,
@@ -10,12 +10,80 @@ use web_time::Instant;
 enum Request {
     Text(u64, Arc<String>, String),
     Right(u64, Arc<String>, String),
-    Tree(u64, Arc<Value>, String),
+    Tree(u64, Arc<Document>, String),
+    #[cfg(target_arch = "wasm32")]
+    Pointer(u64, Arc<Document>, String),
 }
+
+#[cfg(target_arch = "wasm32")]
+#[derive(serde::Serialize, serde::Deserialize)]
+enum RemoteRequest {
+    Text(u64, Arc<String>, String),
+    Right(u64, Arc<String>, String),
+    Tree(u64, crate::web_tasks::DocRef, String),
+    Pointer(u64, crate::web_tasks::DocRef, String),
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(super) fn process_remote(bytes: &[u8]) -> std::result::Result<Vec<u8>, String> {
+    let request: RemoteRequest =
+        serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+    let result = match request {
+        RemoteRequest::Text(id, text, query) => Result::Text(id, find_text(&text, &query)),
+        RemoteRequest::Right(id, text, query) => Result::Right(id, find_text(&text, &query)),
+        RemoteRequest::Tree(id, reference, query) => {
+            Result::Tree(id, find_tree(&reference.resolve()?.0.value, &query))
+        }
+        RemoteRequest::Pointer(id, reference, pointer) => {
+            Result::Pointer(id, reference.resolve()?.0.value.pointer(&pointer).is_some())
+        }
+    };
+    serde_json::to_vec(&result).map_err(|error| error.to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+impl crate::worker::Task<Result> for Request {
+    const KIND: &'static str = "search";
+    fn encode(&self, force: bool) -> std::result::Result<Vec<u8>, String> {
+        let request = match self {
+            Self::Text(id, text, query) => RemoteRequest::Text(*id, text.clone(), query.clone()),
+            Self::Right(id, text, query) => RemoteRequest::Right(*id, text.clone(), query.clone()),
+            Self::Tree(id, doc, query) => RemoteRequest::Tree(
+                *id,
+                crate::web_tasks::DocRef::new(doc, force),
+                query.clone(),
+            ),
+            Self::Pointer(id, doc, pointer) => RemoteRequest::Pointer(
+                *id,
+                crate::web_tasks::DocRef::new(doc, force),
+                pointer.clone(),
+            ),
+        };
+        serde_json::to_vec(&request).map_err(|error| error.to_string())
+    }
+    fn decode(self, bytes: &[u8]) -> Result {
+        match serde_json::from_slice(bytes) {
+            Ok(result) => result,
+            Err(error) => self.failed(error.to_string()),
+        }
+    }
+    fn failed(self, error: String) -> Result {
+        log::error!(target: "json_lens", "event=search_worker_failed error={error:?}");
+        match self {
+            Self::Text(id, ..) => Result::Text(id, TextMatches::default()),
+            Self::Right(id, ..) => Result::Right(id, TextMatches::default()),
+            Self::Tree(id, ..) => Result::Tree(id, TreeMatches::default()),
+            Self::Pointer(id, ..) => Result::Pointer(id, false),
+        }
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
 enum Result {
     Text(u64, TextMatches),
     Right(u64, TextMatches),
     Tree(u64, TreeMatches),
+    #[cfg(target_arch = "wasm32")]
+    Pointer(u64, bool),
 }
 
 pub struct FindState<T> {
@@ -91,13 +159,19 @@ pub struct Search {
     tree_sender: crate::worker::Sender<Request>,
     right_sender: crate::worker::Sender<Request>,
     receiver: mpsc::Receiver<Result>,
+    #[cfg(target_arch = "wasm32")]
+    pointer_sender: crate::worker::Sender<Request>,
+    #[cfg(target_arch = "wasm32")]
+    pub pointer_valid: bool,
+    #[cfg(target_arch = "wasm32")]
+    pointer_state: (u64, String, std::sync::Weak<Document>),
 }
 
 impl Search {
     pub fn new(ctx: egui::Context) -> Self {
         let (results, receiver) = mpsc::channel();
         let mut senders = Vec::new();
-        for _ in 0..3 {
+        for _ in 0..if cfg!(target_arch = "wasm32") { 4 } else { 3 } {
             let sender =
                 crate::worker::spawn(
                     ctx.clone(),
@@ -111,12 +185,18 @@ impl Search {
                             Result::Right(id, find_text(&text, &query))
                         }
                         Request::Tree(id, value, query) => {
-                            Result::Tree(id, find_tree(&value, &query))
+                            Result::Tree(id, find_tree(&value.value, &query))
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        Request::Pointer(id, doc, pointer) => {
+                            Result::Pointer(id, doc.value.pointer(&pointer).is_some())
                         }
                     },
                 );
             senders.push(sender);
         }
+        #[cfg(target_arch = "wasm32")]
+        let pointer_sender = senders.pop().unwrap();
         let right_sender = senders.pop().unwrap();
         let tree_sender = senders.pop().unwrap();
         let sender = senders.pop().unwrap();
@@ -130,14 +210,40 @@ impl Search {
             tree_sender,
             right_sender,
             receiver,
+            #[cfg(target_arch = "wasm32")]
+            pointer_sender,
+            #[cfg(target_arch = "wasm32")]
+            pointer_valid: true,
+            #[cfg(target_arch = "wasm32")]
+            pointer_state: (0, String::new(), std::sync::Weak::new()),
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn check_pointer(&mut self, doc: Arc<Document>, pointer: &str) {
+        if self.pointer_state.1 == pointer
+            && self
+                .pointer_state
+                .2
+                .upgrade()
+                .is_some_and(|old| Arc::ptr_eq(&old, &doc))
+        {
+            return;
+        }
+        self.pointer_state.0 += 1;
+        self.pointer_state.1 = pointer.into();
+        self.pointer_state.2 = Arc::downgrade(&doc);
+        self.pointer_valid = true;
+        let _ =
+            self.pointer_sender
+                .send(Request::Pointer(self.pointer_state.0, doc, pointer.into()));
     }
 
     pub fn tick(
         &mut self,
         ctx: &egui::Context,
         text: Arc<String>,
-        value: Option<Arc<Value>>,
+        value: Option<Arc<Document>>,
         right: Arc<String>,
     ) {
         let now = Instant::now();
@@ -184,6 +290,10 @@ impl Search {
                     self.right.matches = matches;
                     self.right.pending = false;
                     self.right_jump = true;
+                }
+                #[cfg(target_arch = "wasm32")]
+                Result::Pointer(id, valid) if id == self.pointer_state.0 => {
+                    self.pointer_valid = valid
                 }
                 _ => {}
             }

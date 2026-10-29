@@ -3,6 +3,7 @@ use eframe::egui::{self, Color32, FontId, RichText, Stroke, Vec2};
 use json_lens::{Format, preview};
 use std::sync::Arc;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct EditDialog {
     pub pointer: String,
     pub json: String,
@@ -142,6 +143,14 @@ pub fn configure(ctx: &egui::Context, dark: bool) {
     style.visuals.faint_bg_color = p.subtle;
     style.visuals.selection.bg_fill = p.tint;
     style.visuals.selection.stroke = Stroke::new(1.0_f32, p.accent);
+    style.visuals.text_cursor.stroke = Stroke::new(
+        2.0,
+        if dark {
+            Color32::from_rgb(94, 211, 255)
+        } else {
+            Color32::from_rgb(0, 132, 240)
+        },
+    );
     style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, p.border);
     style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, p.muted);
     for widget in [
@@ -265,6 +274,51 @@ fn action_button_with_radius(
 fn button(ui: &mut egui::Ui, text: &str, p: Palette) -> egui::Response {
     action_button(ui, text, p, false, Vec2::new(76.0, 34.0))
 }
+
+fn repository_link(ui: &mut egui::Ui, p: Palette) {
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::splat(32.0), egui::Sense::click());
+    let response = response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("View source on GitHub");
+    response.widget_info(|| egui::WidgetInfo::labeled(
+        egui::WidgetType::Link,
+        ui.is_enabled(),
+        "JSON Lens on GitHub",
+    ));
+    let highlighted = response.hovered() || response.has_focus();
+    if highlighted {
+        ui.painter().rect_filled(rect, 8, p.tint);
+    }
+    // The bundled Nerd Font includes the GitHub mark, so it works offline
+    // and inherits the current theme without a separate image loader.
+    let color = if highlighted { p.accent } else { p.text };
+    let icon = ui.painter().layout_no_wrap(
+        "\u{f09b}".into(),
+        FontId::monospace(22.0),
+        color,
+    );
+    // Center the visible mark rather than the font's advance and line box.
+    let origin = rect.center() - icon.mesh_bounds.center().to_vec2();
+    ui.painter().galley(origin, icon, color);
+    if response.clicked() {
+        ui.ctx().open_url(egui::OpenUrl::new_tab(
+            "https://github.com/sihaixianyu/json-lens",
+        ));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn header_drag(ui: &egui::Ui, response: &egui::Response) {
+    if response.double_clicked_by(egui::PointerButton::Primary) {
+        let maximized = ui.input(|input| input.viewport().maximized.unwrap_or(false));
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+    } else if response.drag_started_by(egui::PointerButton::Primary) {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+}
+
 fn primary(ui: &mut egui::Ui, text: &str, p: Palette) -> egui::Response {
     action_button(ui, text, p, true, Vec2::new(80.0, 34.0))
 }
@@ -698,11 +752,11 @@ impl App {
         {
             self.open_file();
         }
-        if (!self.busy || self.automatic_job)
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
-        {
-            self.save_file();
-        }
+        let format_requested = (!self.busy || self.automatic_job)
+            && ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)
+                    || i.consume_key(egui::Modifiers::CTRL, egui::Key::S)
+            });
         if (!self.busy || self.automatic_job)
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))
         {
@@ -717,22 +771,42 @@ impl App {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    egui::Frame::new()
-                        .fill(p.tint)
-                        .corner_radius(7)
-                        .inner_margin(3)
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new("{ }")
-                                    .monospace()
-                                    .size(16.0)
-                                    .strong()
-                                    .color(p.accent),
-                            );
-                        });
+                    // Reserve the native traffic-light controls inside the shared header.
+                    #[cfg(target_os = "macos")]
+                    if !ui.input(|input| input.viewport().fullscreen.unwrap_or(false)) {
+                        ui.add_space(72.0);
+                    }
+                    let (logo, _) = ui.allocate_exact_size(
+                        egui::vec2(32.0, 32.0),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect_filled(logo, 10, p.tint);
+                    let point = |x: f32, y: f32| {
+                        logo.min + egui::vec2(x, y) * (logo.width() / 128.0)
+                    };
+                    let curves = [
+                        [(46.0, 28.0), (33.0, 28.0), (34.0, 38.0), (34.0, 48.0)],
+                        [(34.0, 48.0), (34.0, 59.0), (27.0, 61.0), (22.0, 64.0)],
+                        [(22.0, 64.0), (27.0, 67.0), (34.0, 69.0), (34.0, 80.0)],
+                        [(34.0, 80.0), (34.0, 90.0), (33.0, 100.0), (46.0, 100.0)],
+                    ];
+                    for mirrored in [false, true] {
+                        for curve in curves {
+                            ui.painter().add(egui::epaint::CubicBezierShape::from_points_stroke(
+                                curve.map(|(x, y)| point(if mirrored { 128.0 - x } else { x }, y)),
+                                false,
+                                egui::Color32::TRANSPARENT,
+                                egui::Stroke::new(1.75, p.accent),
+                            ));
+                        }
+                    }
+                    for x in [54.0, 64.0, 74.0] {
+                        ui.painter().circle_filled(point(x, 64.0), 0.9, p.accent);
+                    }
                     ui.label(RichText::new("JSON Lens")
                         .font(FontId::new(24.0, egui::FontFamily::Name("Brand".into()))))
                         .on_hover_text(format!("{}\n{}\n{}", self.filename, self.status, self.gpu_info));
+                    repository_link(ui, p);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let label = if self.dark { "Dark" } else { "Light" };
                         let theme = primary(ui, label, p)
@@ -758,7 +832,7 @@ impl App {
                         });
                         ui.add_enabled_ui(!self.busy || self.automatic_job, |ui| {
                             if button(ui, "Save as…", p)
-                                .on_hover_text("Save JSON · ⌘S / Ctrl+S")
+                                .on_hover_text("Save JSON")
                                 .clicked()
                             {
                                 self.save_file();
@@ -770,6 +844,15 @@ impl App {
                                 self.open_file();
                             }
                         });
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let response = ui.interact(
+                                ui.available_rect_before_wrap(),
+                                ui.id().with("header_drag"),
+                                egui::Sense::click_and_drag(),
+                            );
+                            header_drag(ui, &response);
+                        }
                     });
                 });
             });
@@ -833,6 +916,15 @@ impl App {
                     self.explorer(&mut right, p);
                 }
             });
+        if format_requested {
+            if self.active_right && self.view == View::Compare {
+                preserve_editor_undo(ctx, "compare_editor", &self.compare_text);
+                self.submit(Job::FormatRight(Arc::new(self.compare_text.clone())));
+            } else {
+                preserve_editor_undo(ctx, "json_source", &self.editor);
+                self.parse(Format::Pretty);
+            }
+        }
         if !self.busy
             && !self.dirty
             && let Some(offset) = self.pending_source_offset.take()
@@ -1031,16 +1123,22 @@ impl App {
                 ui.horizontal_wrapped(|ui| {
                     ui.add_enabled_ui(!self.busy || self.automatic_job, |ui| {
                         ui.horizontal_wrapped(|ui| {
-                            if primary(ui, "Format", p).clicked() {
+                            if primary(ui, "Format", p)
+                                .on_hover_text("Format JSON · ⌘S / Ctrl+S")
+                                .clicked()
+                            {
+                                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
                                 self.parse(Format::Pretty);
                             }
                             if button(ui, "Minify", p).clicked() {
+                                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
                                 self.parse(Format::Compact);
                             }
                             if button(ui, "Expand", p)
                                 .on_hover_text("Expand JSON encoded in strings")
                                 .clicked()
                             {
+                                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
                                 self.parse(Format::Nested);
                             }
                             ui.horizontal(|ui| {
@@ -1065,6 +1163,7 @@ impl App {
                                 })
                                 .clicked()
                                 {
+                                    preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
                                     self.parse(if self.sort_descending {
                                         Format::SortDescending
                                     } else {
@@ -1159,6 +1258,7 @@ impl App {
                     ui,
                     EditorViewport {
                         salt: "source_scroll",
+                        wrap: true,
                         height: editor_height,
                         offset,
                         palette: p,
@@ -1167,28 +1267,51 @@ impl App {
                         alignment: alignment.as_deref(),
                     },
                     |ui| {
+                        let wrap_width = if self.view == View::Compare {
+                            (ui.ctx().content_rect().width()
+                                * self.split_ratio.min(1.0 - self.split_ratio)
+                                - 128.0)
+                                .max(80.0)
+                        } else {
+                            ui.available_width().max(80.0)
+                        };
                         let mut layouter =
                             |ui: &egui::Ui, text: &dyn egui::TextBuffer, _width: f32| {
-                                let galley = self.code.layout(
+                                let galley = self.code.layout_width(
                                     ui,
                                     text.as_str(),
                                     self.dark,
                                     &self.search.text.query,
+                                    wrap_width,
                                 );
-                                aligned_galley(ui, galley, alignment.as_deref(), true)
+                                self.code.align(
+                                    ui,
+                                    galley,
+                                    alignment.as_ref(),
+                                    true,
+                                    &self.compare_text,
+                                    wrap_width,
+                                )
                             };
-                        let mut output = egui::TextEdit::multiline(&mut self.editor)
-                            .id_salt("json_source")
-                            .font(egui::TextStyle::Monospace)
-                            .code_editor()
-                            .frame(false)
-                            .margin(Vec2::ZERO)
-                            .interactive(editable)
-                            .desired_width(ui.available_width())
-                            .desired_rows(1)
-                            .min_size(Vec2::new(0.0, editor_height))
-                            .layouter(&mut layouter)
-                            .show(ui);
+                        let indentation_changed =
+                            editable && prepare_code_input(ui, "json_source", &mut self.editor);
+                        let mut output = show_code_editor(
+                            ui,
+                            "json_source",
+                            indentation_changed,
+                            egui::TextEdit::multiline(&mut self.editor)
+                                .id(egui::Id::new("json_lens_source"))
+                                .font(egui::TextStyle::Monospace)
+                                .code_editor()
+                                .frame(false)
+                                .margin(Vec2::ZERO)
+                                .interactive(editable)
+                                .desired_width(ui.available_width())
+                                .desired_rows(1)
+                                .min_size(Vec2::new(0.0, editor_height))
+                                .layouter(&mut layouter),
+                        );
+                        decoded_hover(ui, &output, &self.editor);
                         #[cfg(not(target_arch = "wasm32"))]
                         if self.smoke_test && std::env::var_os("JSON_LENS_CURSOR").is_some() {
                             output.response.request_focus();
@@ -1408,7 +1531,7 @@ impl App {
                 }
                 self.graph_search(ui, p);
                 self.align_right_content(ui, header_top);
-                let Some(doc) = self.document.clone() else {
+                let Some(_doc) = self.document.clone() else {
                     empty(
                         ui,
                         "Start with a document",
@@ -1417,7 +1540,11 @@ impl App {
                     );
                     return;
                 };
-                if doc.value.pointer(&self.pointer).is_none() {
+                #[cfg(not(target_arch = "wasm32"))]
+                let pointer_valid = _doc.value.pointer(&self.pointer).is_some();
+                #[cfg(target_arch = "wasm32")]
+                let pointer_valid = self.search.pointer_valid;
+                if !pointer_valid && self.view == View::Graph {
                     empty(
                         ui,
                         "Nothing at this path",
@@ -1527,6 +1654,7 @@ impl App {
                     ui,
                     EditorViewport {
                         salt: "compare_scroll",
+                        wrap: true,
                         height,
                         offset: Some(offset),
                         palette: p,
@@ -1535,29 +1663,52 @@ impl App {
                         alignment: alignment.as_deref(),
                     },
                     |ui| {
+                        let wrap_width = if self.view == View::Compare {
+                            (ui.ctx().content_rect().width()
+                                * self.split_ratio.min(1.0 - self.split_ratio)
+                                - 128.0)
+                                .max(80.0)
+                        } else {
+                            ui.available_width().max(80.0)
+                        };
                         let mut layouter =
                             |ui: &egui::Ui, text: &dyn egui::TextBuffer, _width: f32| {
-                                let galley = self.compare_code.layout(
+                                let galley = self.compare_code.layout_width(
                                     ui,
                                     text.as_str(),
                                     self.dark,
                                     &self.search.right.query,
+                                    wrap_width,
                                 );
-                                aligned_galley(ui, galley, alignment.as_deref(), false)
+                                self.compare_code.align(
+                                    ui,
+                                    galley,
+                                    alignment.as_ref(),
+                                    false,
+                                    &self.editor,
+                                    wrap_width,
+                                )
                             };
-                        let output = egui::TextEdit::multiline(&mut self.compare_text)
-                            .id_salt("compare_editor")
-                            .font(egui::TextStyle::Monospace)
-                            .code_editor()
-                            .frame(false)
-                            .margin(Vec2::ZERO)
-                            .interactive(!self.busy || self.automatic_job)
-                            .desired_width(ui.available_width())
-                            .desired_rows(1)
-                            .min_size(Vec2::new(0.0, height))
-                            .hint_text("Paste JSON here…")
-                            .layouter(&mut layouter)
-                            .show(ui);
+                        let indentation_changed = (!self.busy || self.automatic_job)
+                            && prepare_code_input(ui, "compare_editor", &mut self.compare_text);
+                        let output = show_code_editor(
+                            ui,
+                            "compare_editor",
+                            indentation_changed,
+                            egui::TextEdit::multiline(&mut self.compare_text)
+                                .id(egui::Id::new("json_lens_compare"))
+                                .font(egui::TextStyle::Monospace)
+                                .code_editor()
+                                .frame(false)
+                                .margin(Vec2::ZERO)
+                                .interactive(!self.busy || self.automatic_job)
+                                .desired_width(ui.available_width())
+                                .desired_rows(1)
+                                .min_size(Vec2::new(0.0, height))
+                                .hint_text("Paste JSON here…")
+                                .layouter(&mut layouter),
+                        );
+                        decoded_hover(ui, &output, &self.compare_text);
                         if output.response.changed() {
                             self.search.right.changed();
                             self.revision += 1;
@@ -1572,6 +1723,11 @@ impl App {
                         output.response.context_menu(|ui| {
                             ui.add_enabled_ui(!self.busy || self.automatic_job, |ui| {
                                 if ui.button("Format").clicked() {
+                                    preserve_editor_undo(
+                                        ui.ctx(),
+                                        "compare_editor",
+                                        &self.compare_text,
+                                    );
                                     self.submit(Job::FormatRight(Arc::new(
                                         self.compare_text.clone(),
                                     )));
@@ -1642,8 +1798,400 @@ impl App {
     }
 }
 
-fn aligned_galley(
+fn editor_id_key(salt: &str) -> egui::Id {
+    egui::Id::new(("json_lens_editor", salt))
+}
+
+#[derive(Clone)]
+struct EditSnapshot {
+    text: Arc<String>,
+    cursor: egui::text::CCursorRange,
+}
+#[derive(Default)]
+struct CodeHistory {
+    current: Option<EditSnapshot>,
+    past: std::collections::VecDeque<EditSnapshot>,
+    future: Vec<EditSnapshot>,
+    last_change: f64,
+    boundary: bool,
+}
+impl CodeHistory {
+    fn feed(&mut self, text: &str, cursor: egui::text::CCursorRange, now: f64, separate: bool) {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|current| current.text.as_str() == text)
+        {
+            let current = self.current.as_mut().unwrap();
+            if current.cursor != cursor {
+                self.boundary = true;
+                current.cursor = cursor;
+            }
+            return; // Moving/selecting the caret never invalidates redo.
+        }
+        if let Some(current) = self.current.take()
+            && (self.boundary || separate || now - self.last_change > 0.6 || self.past.is_empty())
+        {
+            self.past.push_back(current);
+        }
+        self.current = Some(EditSnapshot {
+            text: Arc::new(text.into()),
+            cursor,
+        });
+        self.future.clear();
+        self.last_change = now;
+        self.boundary = false;
+        while self.past.len() > 1
+            && (self.past.len() > 100
+                || self
+                    .past
+                    .iter()
+                    .map(|snapshot| snapshot.text.len())
+                    .sum::<usize>()
+                    > 32 * 1024 * 1024)
+        {
+            self.past.pop_front();
+        }
+    }
+    fn undo(&mut self, redo: bool) -> Option<EditSnapshot> {
+        let next = if redo {
+            self.future.pop()?
+        } else {
+            self.past.pop_back()?
+        };
+        if let Some(current) = self.current.replace(next.clone()) {
+            if redo {
+                self.past.push_back(current);
+            } else {
+                self.future.push(current);
+            }
+        }
+        self.boundary = true;
+        Some(next)
+    }
+}
+fn code_history(ctx: &egui::Context, salt: &str) -> Arc<std::sync::Mutex<CodeHistory>> {
+    ctx.data_mut(|data| {
+        data.get_temp_mut_or_default::<Arc<std::sync::Mutex<CodeHistory>>>(
+            editor_id_key(salt).with("history"),
+        )
+        .clone()
+    })
+}
+
+fn preserve_editor_undo(ctx: &egui::Context, salt: &str, text: &str) {
+    let Some(id) = ctx.data(|data| data.get_temp::<egui::Id>(editor_id_key(salt))) else {
+        return;
+    };
+    let Some(state) = egui::text_edit::TextEditState::load(ctx, id) else {
+        return;
+    };
+    if let Some(range) = state.cursor.char_range() {
+        let history = code_history(ctx, salt);
+        let mut history = history.lock().unwrap();
+        history.feed(text, range, ctx.input(|input| input.time), true);
+        history.boundary = true;
+        ctx.data_mut(|data| data.insert_temp(editor_id_key(salt).with("restore_focus"), true));
+    }
+}
+
+/// Insert two literal spaces; block indentation and outdent keep selection/undo state.
+fn prepare_code_input(ui: &egui::Ui, salt: &str, text: &mut String) -> bool {
+    let Some(id) = ui
+        .ctx()
+        .data(|data| data.get_temp::<egui::Id>(editor_id_key(salt)))
+    else {
+        return false;
+    };
+    let restore = editor_id_key(salt).with("restore_focus");
+    if ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(restore).unwrap_or(false))
+    {
+        ui.ctx().memory_mut(|memory| memory.request_focus(id));
+        ui.ctx().data_mut(|data| data.remove::<bool>(restore));
+    }
+    if !ui.ctx().memory(|memory| memory.has_focus(id)) {
+        return false;
+    }
+    let mut state = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
+    let mut changed = false;
+    let history = code_history(ui.ctx(), salt);
+    ui.ctx().input_mut(|input| {
+        input.events.retain_mut(|event| {
+            let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+            else {
+                return true;
+            };
+            if (modifiers.ctrl || modifiers.command || modifiers.mac_cmd)
+                && !modifiers.alt
+                && matches!(key, egui::Key::Z | egui::Key::Y)
+            {
+                if let Some(snapshot) = history
+                    .lock()
+                    .unwrap()
+                    .undo(*key == egui::Key::Y || modifiers.shift)
+                {
+                    *text = (*snapshot.text).clone();
+                    state.cursor.set_char_range(Some(snapshot.cursor));
+                    changed = true;
+                }
+                return false;
+            }
+            if *key != egui::Key::Tab || modifiers.ctrl || modifiers.command || modifiers.alt {
+                return true;
+            }
+            let Some(mut range) = state.cursor.char_range() else {
+                return true;
+            };
+            if !modifiers.shift && range.is_empty() {
+                history.lock().unwrap().boundary = true;
+                *event = egui::Event::Text("  ".into());
+                return true;
+            }
+            let chars = range.as_sorted_char_range();
+            let byte_at = |index| {
+                text.char_indices()
+                    .nth(index)
+                    .map_or(text.len(), |(byte, _)| byte)
+            };
+            let start = byte_at(chars.start);
+            let end = byte_at(chars.end);
+            let first = text[..start].rfind('\n').map_or(0, |byte| byte + 1);
+            let last = if end > start && text[..end].ends_with('\n') {
+                end - 1
+            } else {
+                end
+            };
+            let mut lines = vec![first];
+            lines.extend(
+                text[first..last]
+                    .match_indices('\n')
+                    .map(|(offset, _)| first + offset + 1),
+            );
+            for byte in lines.into_iter().rev() {
+                let position = text[..byte].chars().count();
+                let remove = if modifiers.shift {
+                    if text[byte..].starts_with('\t') {
+                        1
+                    } else {
+                        text[byte..]
+                            .bytes()
+                            .take(2)
+                            .take_while(|byte| *byte == b' ')
+                            .count()
+                    }
+                } else {
+                    0
+                };
+                let insert = if modifiers.shift { "" } else { "  " };
+                if remove == 0 && insert.is_empty() {
+                    continue;
+                }
+                text.replace_range(byte..byte + remove, insert);
+                for cursor in [&mut range.primary, &mut range.secondary] {
+                    if cursor.index >= position {
+                        cursor.index = position
+                            + insert.len()
+                            + cursor.index.saturating_sub(position + remove);
+                    }
+                }
+                changed = true;
+            }
+            if changed {
+                state.cursor.set_char_range(Some(range));
+            }
+            false
+        })
+    });
+    if changed {
+        state.store(ui.ctx(), id);
+    }
+    changed
+}
+
+fn show_code_editor(
+    ui: &mut egui::Ui,
+    salt: &str,
+    changed: bool,
+    editor: egui::TextEdit<'_>,
+) -> egui::text_edit::TextEditOutput {
+    let stroke = ui.visuals().text_cursor.stroke;
+    ui.visuals_mut().text_cursor.stroke.color = Color32::TRANSPARENT;
+    let mut output = editor.show(ui);
+    ui.visuals_mut().text_cursor.stroke = stroke;
+    if changed {
+        output.response.mark_changed();
+    }
+    let separate = changed
+        || !output.response.changed()
+        || ui.input(|input| {
+            input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Paste(_)))
+        });
+    let range = output
+        .state
+        .cursor
+        .char_range()
+        .unwrap_or_else(|| egui::text::CCursorRange::one(egui::text::CCursor::new(0)));
+    code_history(ui.ctx(), salt).lock().unwrap().feed(
+        &output.galley.job.text,
+        range,
+        ui.input(|input| input.time),
+        separate,
+    );
+    // CodeHistory owns replay; release egui's duplicate snapshots.
+    output.state.clear_undoer();
+    let restore = editor_id_key(salt).with("restore_focus");
+    if output.response.sense.interactive()
+        && ui
+            .ctx()
+            .data(|data| data.get_temp::<bool>(restore).unwrap_or(false))
+    {
+        output.response.request_focus();
+        ui.ctx().data_mut(|data| data.remove::<bool>(restore));
+    }
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(editor_id_key(salt), output.response.id));
+    if output.response.has_focus()
+        && output.response.sense.interactive()
+        && let Some(range) = output.cursor_range
+    {
+        let now = ui.input(|input| input.time);
+        let key = output.response.id.with("caret_blink");
+        let previous = ui
+            .ctx()
+            .data(|data| data.get_temp::<(egui::text::CCursorRange, f64)>(key));
+        let at = previous
+            .filter(|(old, _)| {
+                *old == range && !output.response.changed() && !output.response.gained_focus()
+            })
+            .map_or(now, |(_, at)| at);
+        ui.ctx().data_mut(|data| data.insert_temp(key, (range, at)));
+        let mut rect = output.galley.pos_from_cursor(range.primary);
+        let font = ui.style().text_styles[&egui::TextStyle::Monospace].clone();
+        if rect.height() == 0.0 {
+            rect.max.y = rect.min.y + ui.fonts_mut(|fonts| fonts.row_height(&font));
+        }
+        let rect =
+            egui::Rect::from_center_size(rect.center(), Vec2::new(0.0, font.size + 2.0))
+                .translate(output.galley_pos.to_vec2());
+        egui::text_selection::visuals::paint_text_cursor(
+            ui,
+            &ui.painter().with_clip_rect(output.text_clip_rect),
+            rect,
+            now - at,
+        );
+    }
+    output
+}
+
+fn decoded_hover(ui: &egui::Ui, output: &egui::text_edit::TextEditOutput, text: &str) {
+    let value = if output.response.hovered() {
+        ui.input(|input| input.pointer.hover_pos())
+            .and_then(|mouse| {
+                let cursor = output.galley.cursor_from_pos(mouse - output.galley_pos);
+                let rect = output
+                    .galley
+                    .pos_from_cursor(cursor)
+                    .translate(output.galley_pos.to_vec2());
+                if (rect.min.x - mouse.x).abs() > 12.0 || (rect.center().y - mouse.y).abs() > 15.0 {
+                    return None;
+                }
+                let offset = text
+                    .char_indices()
+                    .nth(cursor.index)
+                    .map_or(text.len(), |(offset, _)| offset);
+                json_lens::decode::string_at(text, offset)
+            })
+    } else {
+        None
+    };
+    crate::decode_ui::show(&output.response, value.as_deref());
+}
+
+fn aligned_wrapped_galley(
     ui: &egui::Ui,
+    galley: Arc<egui::Galley>,
+    alignment: Option<&json_lens::alignment::Alignment>,
+    left: bool,
+    other: &str,
+    width: f32,
+) -> Arc<egui::Galley> {
+    if !width.is_finite() {
+        return aligned_galley(ui, galley, alignment, left);
+    }
+    let Some(alignment) = alignment else {
+        return galley;
+    };
+    let (side, other_side) = if left {
+        (&alignment.left, &alignment.right)
+    } else {
+        (&alignment.right, &alignment.left)
+    };
+    if side.source != galley.job.text || other_side.source != other {
+        return galley;
+    }
+    if side.source == other_side.source {
+        return galley;
+    }
+    let mut job =
+        egui::text::LayoutJob::simple(other.into(), FontId::monospace(13.0), Color32::WHITE, width);
+    job.wrap.break_anywhere = galley.job.wrap.break_anywhere;
+    let opposite = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    let mut heights = vec![0.0_f32; alignment.height];
+    for (layout, side) in [(&*galley, side), (&*opposite, other_side)] {
+        let mut line = 0;
+        let mut height = 0.0;
+        for row in &layout.rows {
+            height += row.size.y;
+            if row.ends_with_newline {
+                if let Some(display) = side.rows.get(line) {
+                    heights[*display] = heights[*display].max(height);
+                }
+                line += 1;
+                height = 0.0;
+            }
+        }
+        if let Some(display) = side.rows.get(line) {
+            heights[*display] = heights[*display].max(height);
+        }
+    }
+    let mut tops = vec![0.0; heights.len()];
+    let mut total = 0.0;
+    for (top, height) in tops.iter_mut().zip(heights) {
+        *top = total;
+        total += height;
+    }
+    let mut result = (*galley).clone();
+    result.mesh_bounds = egui::Rect::NOTHING;
+    let mut line = 0;
+    let mut within = 0.0;
+    for row in &mut result.rows {
+        let Some(display) = side.rows.get(line) else {
+            return galley;
+        };
+        row.pos.y = tops[*display] + within;
+        result.mesh_bounds |= row.visuals.mesh_bounds.translate(row.pos.to_vec2());
+        within += row.size.y;
+        if row.ends_with_newline {
+            line += 1;
+            within = 0.0;
+        }
+    }
+    result.rect.max.y = total;
+    Arc::new(result)
+}
+
+fn aligned_galley(
+    _ui: &egui::Ui,
     galley: Arc<egui::Galley>,
     alignment: Option<&json_lens::alignment::Alignment>,
     left: bool,
@@ -1659,7 +2207,18 @@ fn aligned_galley(
     if side.source != galley.job.text || side.rows.len() != galley.rows.len() {
         return galley;
     }
-    let line_height = ui.fonts_mut(|fonts| fonts.row_height(&FontId::monospace(13.0)));
+    if alignment.height == galley.rows.len()
+        && side
+            .rows
+            .iter()
+            .enumerate()
+            .all(|(index, row)| index == *row)
+    {
+        return galley;
+    }
+    // Galley rows already have pixel-rounded heights. Reusing raw font metrics here
+    // changes the spacing cumulatively, especially at fractional display scales.
+    let line_height = galley.rows.first().map_or(0.0, |row| row.size.y);
     let mut aligned = (*galley).clone();
     aligned.mesh_bounds = egui::Rect::NOTHING;
     for (row, display) in aligned.rows.iter_mut().zip(&side.rows) {
@@ -1673,6 +2232,7 @@ fn aligned_galley(
 
 struct EditorViewport<'a> {
     salt: &'static str,
+    wrap: bool,
     height: f32,
     offset: Option<f32>,
     palette: Palette,
@@ -1691,10 +2251,14 @@ fn editor_scroll(
         let gutter = ui
             .allocate_exact_size(Vec2::new(64.0, view.height), egui::Sense::hover())
             .0;
-        let mut area = egui::ScrollArea::both()
-            .id_salt(view.salt)
-            .auto_shrink([false, false])
-            .max_height(view.height);
+        let mut area = (if view.wrap {
+            egui::ScrollArea::vertical()
+        } else {
+            egui::ScrollArea::both()
+        })
+        .id_salt(view.salt)
+        .auto_shrink([false, false])
+        .max_height(view.height);
         if let Some(offset) = view.offset {
             area = area
                 .vertical_scroll_offset(offset)
@@ -1721,9 +2285,18 @@ fn editor_scroll(
             .filter(|side| side.source == output.galley.job.text);
         let color = if view.left { p.red } else { p.green };
         let text_painter = ui.painter().with_clip_rect(scroll.inner_rect);
-        for (index, row) in output.galley.rows.iter().enumerate() {
+        let mut line = 0;
+        let mut first_visual_row = true;
+        for row in &output.galley.rows {
+            let index = line;
+            let number = first_visual_row;
+            first_visual_row = row.ends_with_newline;
+            line += usize::from(row.ends_with_newline);
             let y = output.galley_pos.y + row.pos.y;
-            if y + row.size.y < gutter.top() || y > gutter.bottom() {
+            if y > gutter.bottom() {
+                break;
+            }
+            if y + row.size.y < gutter.top() {
                 continue;
             }
             let changed = side.is_some_and(|side| side.changed.get(index) == Some(&true));
@@ -1745,13 +2318,15 @@ fn editor_scroll(
                     color.gamma_multiply(0.06),
                 );
             }
-            painter.text(
-                egui::pos2(gutter.right() - 8.0, y),
-                egui::Align2::RIGHT_TOP,
-                (index + view.first_line).to_string(),
-                FontId::monospace(13.0),
-                if changed { color } else { p.muted },
-            );
+            if number {
+                painter.text(
+                    egui::pos2(gutter.right() - 8.0, y),
+                    egui::Align2::RIGHT_TOP,
+                    (index + view.first_line).to_string(),
+                    FontId::monospace(13.0),
+                    if changed { color } else { p.muted },
+                );
+            }
         }
         scroll
     })
@@ -1858,21 +2433,92 @@ pub struct CodeCache {
     dark: bool,
     pixels_per_point: f32,
     job: Option<egui::text::LayoutJob>,
+    aligned: Option<AlignedLayout>,
+}
+
+struct AlignedLayout {
+    base: Arc<egui::Galley>,
+    alignment: Arc<json_lens::alignment::Alignment>,
+    result: Arc<egui::Galley>,
 }
 
 impl CodeCache {
+    fn align(
+        &mut self,
+        ui: &egui::Ui,
+        galley: Arc<egui::Galley>,
+        alignment: Option<&Arc<json_lens::alignment::Alignment>>,
+        left: bool,
+        other: &str,
+        width: f32,
+    ) -> Arc<egui::Galley> {
+        let Some(alignment) = alignment else {
+            self.aligned = None;
+            return galley;
+        };
+        let (side, opposite) = if left {
+            (&alignment.left, &alignment.right)
+        } else {
+            (&alignment.right, &alignment.left)
+        };
+        if side.source != galley.job.text || opposite.source != other {
+            self.aligned = None;
+            return galley;
+        }
+        if let Some(cached) = &self.aligned
+            && Arc::ptr_eq(&cached.base, &galley)
+            && Arc::ptr_eq(&cached.alignment, alignment)
+        {
+            return cached.result.clone();
+        }
+        let result = aligned_wrapped_galley(ui, galley.clone(), Some(alignment), left, other, width);
+        self.aligned = Some(AlignedLayout {
+            base: galley,
+            alignment: alignment.clone(),
+            result: result.clone(),
+        });
+        result
+    }
+
+    fn layout_width(
+        &mut self,
+        ui: &egui::Ui,
+        text: &str,
+        dark: bool,
+        query: &str,
+        width: f32,
+    ) -> Arc<egui::Galley> {
+        let _stage = json_lens::diagnostics::Stage::slow("editor_layout", text.len(), 8.0);
+        self.layout_at(ui, text, dark, query, width)
+    }
+    #[cfg(test)]
     fn layout(&mut self, ui: &egui::Ui, text: &str, dark: bool, query: &str) -> Arc<egui::Galley> {
+        self.layout_at(ui, text, dark, query, f32::INFINITY)
+    }
+    fn layout_at(
+        &mut self,
+        ui: &egui::Ui,
+        text: &str,
+        dark: bool,
+        query: &str,
+        width: f32,
+    ) -> Arc<egui::Galley> {
         if self.text == text
             && self.query == query
             && self.dark == dark
             && self.pixels_per_point == ui.ctx().pixels_per_point()
             && let Some(job) = &self.job
+            && job.wrap.max_width == width
         {
             // Resolve through egui each pass: theme changes and atlas pressure invalidate glyph UVs.
             return ui.fonts_mut(|fonts| fonts.layout_job(job.clone()));
         }
+        let _stage = json_lens::diagnostics::Stage::new("syntax_layout", text.len());
         let p = palette(dark);
-        let mut job = egui::text::LayoutJob::default();
+        let mut job = egui::text::LayoutJob {
+            text: text.to_owned(),
+            ..Default::default()
+        };
         if text.is_empty() {
             job.append(
                 "",
@@ -1933,17 +2579,23 @@ impl CodeCache {
             while index < text.len() && !text.is_char_boundary(index) {
                 index += 1;
             }
-            job.append(
-                &text[start..index],
-                0.0,
-                egui::TextFormat {
-                    font_id: FontId::monospace(13.0),
-                    color,
-                    ..Default::default()
-                },
-            );
+            if let Some(section) = job.sections.last_mut()
+                && section.format.color == color
+            {
+                section.byte_range.end = index;
+            } else {
+                job.sections.push(egui::text::LayoutSection {
+                    leading_space: 0.0,
+                    byte_range: start..index,
+                    format: egui::TextFormat {
+                        font_id: FontId::monospace(13.0),
+                        color,
+                        ..Default::default()
+                    },
+                });
+            }
         }
-        job.wrap.max_width = f32::INFINITY;
+        job.wrap.max_width = width;
         let matches = json_lens::search::find_text(text, query);
         if !matches.ranges.is_empty() {
             let sections = std::mem::take(&mut job.sections);
@@ -1994,6 +2646,40 @@ impl CodeCache {
 #[cfg(test)]
 mod feedback_tests {
     use super::*;
+
+    #[test]
+    fn wrapped_comparison_keeps_following_lines_aligned_and_cursor_offsets_intact() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        configure(&ctx, false);
+        let left = format!(
+            "{{\n  \"value\": \"{}\",\n  \"last\": true\n}}",
+            "中文 long value ".repeat(12)
+        );
+        let right = "{\n  \"value\": \"short\",\n  \"last\": true\n}";
+        let alignment = json_lens::alignment::align(&left, right);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let a = CodeCache::default().layout_width(ui, &left, false, "", 180.0);
+                let b = CodeCache::default().layout_width(ui, right, false, "", 180.0);
+                assert!(a.rows.len() > left.lines().count());
+                let a = aligned_wrapped_galley(ui, a, Some(&alignment), true, right, 180.0);
+                let b = aligned_wrapped_galley(ui, b, Some(&alignment), false, &left, 180.0);
+                let a_index = left[..left.find("\"last\"").unwrap()].chars().count();
+                let b_index = right[..right.find("\"last\"").unwrap()].chars().count();
+                let a_cursor = a.pos_from_cursor(egui::text::CCursor::new(a_index));
+                let b_cursor = b.pos_from_cursor(egui::text::CCursor::new(b_index));
+                assert_eq!(a_cursor.top(), b_cursor.top());
+                assert_eq!(a.rect.height(), b.rect.height());
+                assert_eq!(
+                    a.cursor_from_pos(a_cursor.center().to_vec2()).index,
+                    a_index
+                );
+                assert_eq!(a.job.text, left);
+                assert_eq!(a.rows.iter().filter(|row| row.ends_with_newline).count(), 3);
+            });
+        });
+    }
 
     #[test]
     fn equal_split_has_mirrored_pane_dimensions() {
@@ -2051,6 +2737,50 @@ mod feedback_tests {
     }
 
     #[test]
+    fn comparison_preserves_normal_line_spacing_at_each_pixel_scale() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            install_fonts(&ctx);
+            configure(&ctx, false);
+            let source = "{\n  \"name\": \"中文 🚀\",\n  \"value\": 123,\n  \"ready\": true\n}";
+            let alignment = json_lens::alignment::align(source, source);
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                ctx.set_pixels_per_point(scale);
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let normal = CodeCache::default().layout(ui, source, false, "");
+                    let aligned = aligned_galley(ui, normal.clone(), Some(&alignment), true);
+                    for (before, after) in normal.rows.iter().zip(&aligned.rows) {
+                        assert_eq!(
+                            before.pos, after.pos,
+                            "line spacing changed at scale {scale}"
+                        );
+                        assert_eq!(before.size, after.size);
+                        assert!(Arc::ptr_eq(&before.row, &after.row));
+                    }
+                    assert_eq!(normal.rect, aligned.rect);
+                    let right = source.replace(
+                        "  \"ready\": true",
+                        "  \"extra\": {\n    \"nested\": true\n  },\n  \"ready\": true",
+                    );
+                    let gaps = json_lens::alignment::align(source, &right);
+                    let aligned = aligned_galley(ui, normal.clone(), Some(&gaps), true);
+                    let line_height = normal.rows[0].size.y;
+                    for (index, (before, after)) in
+                        normal.rows.iter().zip(&aligned.rows).enumerate()
+                    {
+                        assert_eq!(before.size, after.size);
+                        assert!(Arc::ptr_eq(&before.row, &after.row));
+                        assert!(
+                            (after.pos.y - gaps.left.rows[index] as f32 * line_height).abs()
+                                <= 0.5 / aligned.pixels_per_point
+                        );
+                    }
+                });
+            });
+        }
+    }
+
+    #[test]
     fn aligned_text_preserves_cursor_offsets_and_corresponding_row_heights() {
         let ctx = egui::Context::default();
         configure(&ctx, false);
@@ -2101,6 +2831,7 @@ mod feedback_tests {
                             ui,
                             EditorViewport {
                                 salt: "gutter_test",
+                                wrap: false,
                                 height: 200.0,
                                 offset: Some(0.0),
                                 palette: palette(false),
@@ -2161,7 +2892,134 @@ mod feedback_tests {
     }
 
     #[test]
-    fn source_cursor_uses_the_same_height_as_the_monospace_glyphs() {
+    fn code_editor_tab_undo_redo_and_caret_use_the_widget_input_path() {
+        let ctx = egui::Context::default();
+        configure(&ctx, false);
+        let mut text = "abc".to_owned();
+        let keys = [
+            None,
+            None, // Register the editor's focus-lock before sending Tab.
+            Some((egui::Key::Tab, egui::Modifiers::NONE)),
+            Some((egui::Key::Z, egui::Modifiers::CTRL)),
+            Some((egui::Key::Z, egui::Modifiers::CTRL | egui::Modifiers::SHIFT)),
+            Some((egui::Key::Z, egui::Modifiers::CTRL)),
+            Some((egui::Key::Y, egui::Modifiers::CTRL)),
+        ];
+        for (frame, key) in keys.into_iter().enumerate() {
+            let output = ctx.run(
+                egui::RawInput {
+                    time: Some(frame as f64 * 0.1),
+                    events: key
+                        .map(|(key, modifiers)| egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                        })
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let changed = prepare_code_input(ui, "tab_test", &mut text);
+                        let output = show_code_editor(
+                            ui,
+                            "tab_test",
+                            changed,
+                            egui::TextEdit::multiline(&mut text)
+                                .id_salt("tab_test")
+                                .font(egui::TextStyle::Monospace)
+                                .code_editor(),
+                        );
+                        if frame == 0 {
+                            output.response.request_focus();
+                        }
+                    });
+                },
+            );
+            assert_eq!(
+                text,
+                if frame >= 2 && frame % 2 == 0 {
+                    "abc  "
+                } else {
+                    "abc"
+                },
+                "frame={frame}"
+            );
+            if frame > 0 {
+                assert!(output.shapes.iter().any(|shape| matches!(
+                    &shape.shape,
+                    egui::Shape::LineSegment { points, stroke }
+                        if stroke.color == Color32::from_rgb(0, 132, 240)
+                            && (stroke.width - 2.0).abs() < 0.01
+                            && (points[0].x - points[1].x).abs() < 0.01
+                            && ((points[1].y - points[0].y).abs() - 15.0).abs() < 0.01
+                )));
+            }
+        }
+    }
+
+    #[test]
+    fn selected_unicode_lines_indent_by_two_and_outdent_is_undoable() {
+        let ctx = egui::Context::default();
+        configure(&ctx, false);
+        let mut text = "  中\n  文".to_owned();
+        let keys = [
+            None,
+            Some((egui::Key::A, egui::Modifiers::COMMAND)),
+            Some((egui::Key::Tab, egui::Modifiers::SHIFT)),
+            Some((egui::Key::Z, egui::Modifiers::CTRL)),
+            Some((egui::Key::Y, egui::Modifiers::CTRL)),
+            Some((egui::Key::Tab, egui::Modifiers::NONE)),
+        ];
+        for (frame, key) in keys.into_iter().enumerate() {
+            let _ = ctx.run(
+                egui::RawInput {
+                    time: Some(frame as f64 * 0.1),
+                    events: key
+                        .map(|(key, modifiers)| egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                        })
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let changed = prepare_code_input(ui, "block_test", &mut text);
+                        let output = show_code_editor(
+                            ui,
+                            "block_test",
+                            changed,
+                            egui::TextEdit::multiline(&mut text)
+                                .id_salt("block_test")
+                                .code_editor(),
+                        );
+                        if frame == 0 {
+                            output.response.request_focus();
+                        }
+                    });
+                },
+            );
+            assert_eq!(
+                text,
+                if frame == 2 || frame == 4 {
+                    "中\n文"
+                } else {
+                    "  中\n  文"
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn code_layout_preserves_font_row_metrics_for_cursor_positions() {
         let ctx = egui::Context::default();
         configure(&ctx, false);
         let mut cache = CodeCache::default();
@@ -2190,6 +3048,47 @@ mod feedback_tests {
                 }
             });
         });
+    }
+
+    #[test]
+    fn wrapped_compare_stays_aligned_after_cached_frames_width_and_theme_changes() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let left = "{\n  \"label\": \"中文 hello hello hello hello hello hello\",\n  \"value\": 42\n}";
+        let right = left.replace("  \"value\"", "  \"inserted\": true,\n  \"value\"");
+        let alignment = Arc::new(json_lens::alignment::align(left, &right));
+        let mut left_cache = CodeCache::default();
+        let mut right_cache = CodeCache::default();
+        for (dark, width) in [(false, 200.0), (false, 200.0), (true, 90.0), (true, 90.0), (false, 160.0)] {
+            configure(&ctx, dark);
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let a = left_cache.layout_width(ui, left, dark, "中文", width);
+                    let a = left_cache.align(ui, a, Some(&alignment), true, &right, width);
+                    let b = right_cache.layout_width(ui, &right, dark, "中文", width);
+                    let b = right_cache.align(ui, b, Some(&alignment), false, left, width);
+                    assert_eq!(a.job.text, left);
+                    assert_eq!(b.job.text, right);
+                    let line_offsets = |text: &str| {
+                        let mut offset = 0;
+                        text.split_inclusive('\n').map(|line| {
+                            let start = offset;
+                            offset += line.chars().count();
+                            start
+                        }).collect::<Vec<_>>()
+                    };
+                    let a_offsets = line_offsets(left);
+                    let b_offsets = line_offsets(&right);
+                    for (line, display) in alignment.left.rows.iter().enumerate() {
+                        if let Ok(other) = alignment.right.rows.binary_search(display) {
+                            let a_top = a.pos_from_cursor(egui::text::CCursor::new(a_offsets[line])).top();
+                            let b_top = b.pos_from_cursor(egui::text::CCursor::new(b_offsets[other])).top();
+                            assert!((a_top - b_top).abs() < 0.01);
+                        }
+                    }
+                });
+            });
+        }
     }
 
     #[test]

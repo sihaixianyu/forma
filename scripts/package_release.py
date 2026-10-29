@@ -33,12 +33,14 @@ def macos(binary, version, arch, output, stage):
     shutil.copy2(binary, executable)
     executable.chmod(0o755)
     licenses(contents / "Resources")
+    shutil.copy2(ROOT / "packaging/icons/json-lens.icns", contents / "Resources/json-lens.icns")
     with (contents / "Info.plist").open("wb") as file:
         plistlib.dump({
             "CFBundleName": "JSON Lens",
             "CFBundleDisplayName": "JSON Lens",
             "CFBundleIdentifier": "io.github.sihaixianyu.json-lens",
             "CFBundleExecutable": "json-lens",
+            "CFBundleIconFile": "json-lens.icns",
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": version.split("-")[0].split("+")[0],
             "CFBundleVersion": version.split("-")[0].split("+")[0],
@@ -58,6 +60,7 @@ def windows(binary, version, arch, output, stage):
     # A standalone binary is useful alongside the installer.
     shutil.copy2(binary, output / f"json-lens-windows-{arch}-{version}.exe")
     shutil.copy2(binary, stage / "json-lens.exe")
+    shutil.copy2(ROOT / "packaging/icons/json-lens.ico", stage / "json-lens.ico")
     licenses(stage)
     installer = output / f"json-lens-windows-{arch}-{version}-setup.exe"
     nsis = shutil.which("makensis")
@@ -74,6 +77,9 @@ def linux(binary, version, arch, output, stage):
     shutil.copy2(binary, executable)
     executable.chmod(0o755)
     licenses(portable)
+    shutil.copy2(ROOT / "packaging/json-lens.svg", portable / "json-lens.svg")
+    shutil.copy2(ROOT / "packaging/icons/json-lens-256.png", portable / "json-lens.png")
+    shutil.copy2(ROOT / "packaging/json-lens.desktop", portable / "json-lens.desktop")
     with tarfile.open(output / f"json-lens-linux-{arch}-{version}.tar.gz", "w:gz") as archive:
         archive.add(portable, arcname="json-lens")
 
@@ -88,6 +94,11 @@ def linux(binary, version, arch, output, stage):
         target = package / destination
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / "packaging" / resource, target)
+
+    for size in (16, 24, 32, 48, 64, 128, 256, 512):
+        target = package / f"usr/share/icons/hicolor/{size}x{size}/apps/json-lens.png"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / f"packaging/icons/json-lens-{size}.png", target)
 
     # Derive runtime library requirements from the actual executable.
     debian = stage / "debian"

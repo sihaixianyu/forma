@@ -1,0 +1,254 @@
+{
+  "date": "2026-10-29",
+  "machine": "Apple M4 Pro / macOS arm64",
+  "browser": "Chrome 156.0.8078.73",
+  "viewport": [
+    1280,
+    800
+  ],
+  "device_scale_factor": 1,
+  "debug_logging": true,
+  "method": "requestAnimationFrame gaps during Open file and 16 wheel events; opening observation 2500 ms; full editing enabled",
+  "runs": [
+    {
+      "label": "before",
+      "pretty": true,
+      "bytes": 999939,
+      "opening": {
+        "frames": 79,
+        "median_gap_ms": 16.699999999999818,
+        "p95_gap_ms": 83.40000000000009,
+        "max_gap_ms": 416.69999999999993,
+        "over_50_ms": 14
+      },
+      "scrolling": {
+        "frames": 99,
+        "median_gap_ms": 83.30000000000109,
+        "p95_gap_ms": 100,
+        "max_gap_ms": 100.10000000000036,
+        "over_50_ms": 94
+      }
+    },
+    {
+      "label": "before",
+      "pretty": false,
+      "bytes": 987798,
+      "opening": {
+        "frames": 99,
+        "median_gap_ms": 16.699999999999932,
+        "p95_gap_ms": 50,
+        "max_gap_ms": 350.0000000000001,
+        "over_50_ms": 3
+      },
+      "scrolling": {
+        "frames": 117,
+        "median_gap_ms": 50,
+        "p95_gap_ms": 50.100000000000364,
+        "max_gap_ms": 66.69999999999982,
+        "over_50_ms": 16
+      }
+    },
+    {
+      "label": "after",
+      "pretty": true,
+      "bytes": 999939,
+      "opening": {
+        "frames": 143,
+        "median_gap_ms": 16.699999999999818,
+        "p95_gap_ms": 16.799999999999727,
+        "max_gap_ms": 116.70000000000005,
+        "over_50_ms": 1
+      },
+      "scrolling": {
+        "frames": 139,
+        "median_gap_ms": 16.699999999999818,
+        "p95_gap_ms": 33.30000000000018,
+        "max_gap_ms": 33.400000000000546,
+        "over_50_ms": 0
+      }
+    },
+    {
+      "label": "after",
+      "pretty": false,
+      "bytes": 987798,
+      "opening": {
+        "frames": 139,
+        "median_gap_ms": 16.699999999999818,
+        "p95_gap_ms": 16.799999999999955,
+        "max_gap_ms": 166.60000000000002,
+        "over_50_ms": 1
+      },
+      "scrolling": {
+        "frames": 137,
+        "median_gap_ms": 16.699999999999818,
+        "p95_gap_ms": 33.400000000000546,
+        "max_gap_ms": 33.400000000000546,
+        "over_50_ms": 0
+      }
+    }
+  ],
+  "native_cpu_before": [
+    {
+      "bytes": 987798,
+      "pretty": false,
+      "mode": "graph",
+      "phase": "idle",
+      "cold_ui_ms": 171.58295900000002,
+      "cold_tessellation_ms": 0.5698749999999999,
+      "median_frame_ms": 17.032292,
+      "max_frame_ms": 20.782418
+    },
+    {
+      "bytes": 987798,
+      "pretty": false,
+      "mode": "graph",
+      "phase": "scroll",
+      "cold_ui_ms": 171.58295900000002,
+      "cold_tessellation_ms": 0.5698749999999999,
+      "median_frame_ms": 17.338874999999998,
+      "max_frame_ms": 17.50325
+    },
+    {
+      "bytes": 987798,
+      "pretty": false,
+      "mode": "compare",
+      "phase": "idle",
+      "cold_ui_ms": 224.37975,
+      "cold_tessellation_ms": 0.367084,
+      "median_frame_ms": 34.282708,
+      "max_frame_ms": 34.610875
+    },
+    {
+      "bytes": 987798,
+      "pretty": false,
+      "mode": "compare",
+      "phase": "scroll",
+      "cold_ui_ms": 224.37975,
+      "cold_tessellation_ms": 0.367084,
+      "median_frame_ms": 36.184375,
+      "max_frame_ms": 36.597457999999996
+    },
+    {
+      "bytes": 999939,
+      "pretty": true,
+      "mode": "graph",
+      "phase": "idle",
+      "cold_ui_ms": 104.902958,
+      "cold_tessellation_ms": 0.7568330000000001,
+      "median_frame_ms": 30.579416000000002,
+      "max_frame_ms": 31.166542
+    },
+    {
+      "bytes": 999939,
+      "pretty": true,
+      "mode": "graph",
+      "phase": "scroll",
+      "cold_ui_ms": 104.902958,
+      "cold_tessellation_ms": 0.7568330000000001,
+      "median_frame_ms": 29.448207999999997,
+      "max_frame_ms": 31.894917000000003
+    },
+    {
+      "bytes": 999939,
+      "pretty": true,
+      "mode": "compare",
+      "phase": "idle",
+      "cold_ui_ms": 180.55516599999999,
+      "cold_tessellation_ms": 0.841667,
+      "median_frame_ms": 63.058623999999995,
+      "max_frame_ms": 67.112459
+    },
+    {
+      "bytes": 999939,
+      "pretty": true,
+      "mode": "compare",
+      "phase": "scroll",
+      "cold_ui_ms": 180.55516599999999,
+      "cold_tessellation_ms": 0.841667,
+      "median_frame_ms": 61.63166700000001,
+      "max_frame_ms": 64.268084
+    }
+  ],
+  "native_cpu_after": [
+    {
+      "bytes": 987798,
+      "pretty": false,
+      "mode": "graph",
+      "phase": "idle",
+      "cold_ui_ms": 87.74445899999999,
+      "cold_tessellation_ms": 0.5802090000000001,
+      "median_frame_ms": 7.780208000000001,
+      "max_frame_ms": 9.018915999999999
+    },
+    {
+      "bytes": 987798,
+      "pretty": false,
+      "mode": "graph",
+      "phase": "scroll",
+      "cold_ui_ms": 87.74445899999999,
+      "cold_tessellation_ms": 0.5802090000000001,
+      "median_frame_ms": 7.788333000000001,
+      "max_frame_ms": 8.325374
+    },
+    {
+      "bytes": 987798,
+      "pretty": false,
+      "mode": "compare",
+      "phase": "idle",
+      "cold_ui_ms": 80.06387500000001,
+      "cold_tessellation_ms": 0.378334,
+      "median_frame_ms": 14.8325,
+      "max_frame_ms": 15.356167000000001
+    },
+    {
+      "bytes": 987798,
+      "pretty": false,
+      "mode": "compare",
+      "phase": "scroll",
+      "cold_ui_ms": 80.06387500000001,
+      "cold_tessellation_ms": 0.378334,
+      "median_frame_ms": 14.203208000000002,
+      "max_frame_ms": 14.831166999999999
+    },
+    {
+      "bytes": 999939,
+      "pretty": true,
+      "mode": "graph",
+      "phase": "idle",
+      "cold_ui_ms": 33.5015,
+      "cold_tessellation_ms": 0.787875,
+      "median_frame_ms": 6.278166000000001,
+      "max_frame_ms": 7.182333
+    },
+    {
+      "bytes": 999939,
+      "pretty": true,
+      "mode": "graph",
+      "phase": "scroll",
+      "cold_ui_ms": 33.5015,
+      "cold_tessellation_ms": 0.787875,
+      "median_frame_ms": 6.061375,
+      "max_frame_ms": 6.579790999999999
+    },
+    {
+      "bytes": 999939,
+      "pretty": true,
+      "mode": "compare",
+      "phase": "idle",
+      "cold_ui_ms": 42.251958,
+      "cold_tessellation_ms": 1.159292,
+      "median_frame_ms": 11.365708,
+      "max_frame_ms": 11.972500000000002
+    },
+    {
+      "bytes": 999939,
+      "pretty": true,
+      "mode": "compare",
+      "phase": "scroll",
+      "cold_ui_ms": 42.251958,
+      "cold_tessellation_ms": 1.159292,
+      "median_frame_ms": 11.534208,
+      "max_frame_ms": 11.844042
+    }
+  ]
+}

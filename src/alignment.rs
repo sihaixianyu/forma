@@ -1,15 +1,16 @@
 use similar::{Algorithm, DiffTag, TextDiff};
 use std::time::Duration;
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Side {
+    #[serde(skip)]
     pub source: String,
     /// Original line index -> aligned display row. Gaps never enter the document.
     pub rows: Vec<usize>,
     pub changed: Vec<bool>,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Alignment {
     pub left: Side,
     pub right: Side,

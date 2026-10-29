@@ -8,10 +8,20 @@ use std::path::PathBuf;
 use web_time::Instant;
 #[cfg(target_arch = "wasm32")]
 mod browser;
+#[cfg(all(target_arch = "wasm32", feature = "bench-web"))]
+mod browser_bench;
 mod canvas;
+mod decode_ui;
+#[cfg(all(not(target_arch = "wasm32"), feature = "bench-ui"))]
+#[path = "../bench/editor.rs"]
+mod editor_bench;
 mod feedback;
 mod find;
 mod ui;
+#[cfg(target_arch = "wasm32")]
+mod web_tasks;
+#[cfg(target_arch = "wasm32")]
+mod web_worker;
 mod worker;
 
 use eframe::egui;
@@ -19,6 +29,7 @@ use json_lens::{
     Difference, Document, EDIT_LIMIT, Format, PREVIEW_LIMIT, compare, csv_to_json, format_document,
     preview, process,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use serde_json::Value;
 use std::{
     sync::{Arc, mpsc},
@@ -143,13 +154,17 @@ fn document_output(doc: Document) -> Output {
 }
 
 fn execute(job: Job) -> Result<Output, String> {
-    match job {
+    log::debug!(target: "json_lens", "event=job_start operation={:?}", job.label());
+    let _stage = json_lens::diagnostics::Stage::new("execute_job", 0);
+    let result = (|| match job {
         Job::RequestFormat(_) => Err("Unresolved format request".into()),
         Job::Transform(doc, format, graph) => {
             let formatted = format_document(&doc, format)?;
             if Arc::ptr_eq(&doc.value, &formatted.value) {
+                log::debug!(target: "json_lens", "event=graph_cache reused=true");
                 Ok(Output::Document(formatted, graph))
             } else {
+                log::debug!(target: "json_lens", "event=graph_cache reused=false");
                 Ok(document_output(formatted))
             }
         }
@@ -216,19 +231,26 @@ fn execute(job: Job) -> Result<Output, String> {
             })
         }
         Job::Compare(left, right) => {
-            let a: Value = serde_json::from_str(&left).map_err(|e| format!("Left JSON: {e}"))?;
-            let b: Value = serde_json::from_str(&right).map_err(|e| format!("Right JSON: {e}"))?;
-            let diffs = compare(&a, &b, 1000);
+            let a = json_lens::parse_json(&left).map_err(|e| format!("Left JSON: {e}"))?;
+            let b = json_lens::parse_json(&right).map_err(|e| format!("Right JSON: {e}"))?;
+            let diffs = {
+                let _stage =
+                    json_lens::diagnostics::Stage::new("compare_walk", left.len() + right.len());
+                compare(&a, &b, 1000)
+            };
+            log::debug!(target: "json_lens", "event=compare_result differences={}", diffs.len());
             let (a, b) = diffs
                 .first()
                 .map(|d| diff_ranges(&left, &right, &d.pointer))
                 .unwrap_or_default();
-            Ok(Output::Comparison(
-                diffs,
-                Arc::new(json_lens::alignment::align(&left, &right)),
-                a,
-                b,
-            ))
+            let alignment = {
+                let _stage = json_lens::diagnostics::Stage::new(
+                    "compare_alignment",
+                    left.len() + right.len(),
+                );
+                Arc::new(json_lens::alignment::align(&left, &right))
+            };
+            Ok(Output::Comparison(diffs, alignment, a, b))
         }
         Job::FormatRight(text) => {
             process(text, Format::Pretty).map(|doc| Output::RightText(doc.text))
@@ -242,7 +264,14 @@ fn execute(job: Job) -> Result<Output, String> {
             std::fs::write(path, text.as_bytes()).map_err(|e| e.to_string())?;
             Ok(Output::Saved)
         }
-    }
+    })();
+    let outcome = match &result {
+        Ok(Output::Invalid(..)) => "invalid_json",
+        Ok(_) => "ok",
+        Err(_) => "error",
+    };
+    log::debug!(target: "json_lens", "event=job_finish outcome={outcome}");
+    result
 }
 
 #[derive(PartialEq)]
@@ -399,6 +428,7 @@ impl App {
         ctx.options_mut(|options| options.fallback_theme = egui::Theme::Light);
         let (sender, completed) = mpsc::channel();
         let jobs = worker::spawn(ctx.clone(), sender, false, |work: Work| {
+            log::debug!(target: "json_lens", "event=work_metadata revision={} user_action={} reset_view={}", work.revision, work.user_action, work.reset_view);
             let start = Instant::now();
             let target = match &work.job {
                 Job::Edit(_, pointer, key, true) => pointer
@@ -430,6 +460,12 @@ impl App {
                     {"id": 1, "name": "Getting started", "status": "ready", "size": 1024},
                     {"id": 2, "name": "Your next document", "status": "draft", "size": 2048}
                 ],
+                "encoded": {
+                    "base64": "SGVsbG8sIEpTT04gTGVucyE=",
+                    "base64_chinese": "5Lit5paH",
+                    "url": "Hello%2C%20JSON%20Lens%21",
+                    "hex": "48656c6c6f2c204a534f4e204c656e7321"
+                },
                 "updated": null
             }))
             .expect("valid example"),
@@ -662,6 +698,7 @@ impl App {
             self.busy = false;
             self.automatic_job = false;
             if done.revision != self.revision {
+                log::debug!(target: "json_lens", "event=stale_result revision={} current_revision={}", done.revision, self.revision);
                 continue;
             }
             let feedback_before = self.full_text.clone();
@@ -821,13 +858,17 @@ impl eframe::App for App {
         self.sync_theme(ctx);
         self.receive();
         self.tick_automatic_jobs(Instant::now());
+        #[cfg(target_arch = "wasm32")]
+        if let Some(doc) = self.document.clone() {
+            self.search.check_pointer(doc, &self.pointer);
+        }
         self.search.tick(
             ctx,
             self.search_source.clone(),
             if self.dirty {
                 None
             } else {
-                self.document.as_ref().map(|doc| doc.value.clone())
+                self.document.clone()
             },
             if self.search.right.pending {
                 Arc::new(self.compare_text.clone())
@@ -931,17 +972,36 @@ impl eframe::App for App {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
+    json_lens::diagnostics::init();
+    #[cfg(feature = "bench-ui")]
+    if std::env::args().any(|arg| arg == "--bench-editor") {
+        editor_bench::run();
+        return Ok(());
+    }
+    let viewport = egui::ViewportBuilder::default()
+        .with_app_id("json-lens")
+        .with_inner_size(if std::env::var_os("JSON_LENS_NARROW").is_some() {
+            [900.0, 650.0]
+        } else {
+            [1280.0, 800.0]
+        })
+        .with_min_inner_size([800.0, 500.0])
+        .with_icon(
+            eframe::icon_data::from_png_bytes(include_bytes!(
+                "../packaging/icons/json-lens-256.png"
+            ))
+            .expect("bundled application icon must be a valid PNG"),
+        );
+    #[cfg(target_os = "macos")]
+    let viewport = viewport
+        .with_fullsize_content_view(true)
+        .with_titlebar_shown(false)
+        .with_title_shown(false);
     eframe::run_native(
         "JSON Lens",
         eframe::NativeOptions {
             renderer: eframe::Renderer::Wgpu,
-            viewport: egui::ViewportBuilder::default()
-                .with_inner_size(if std::env::var_os("JSON_LENS_NARROW").is_some() {
-                    [900.0, 650.0]
-                } else {
-                    [1280.0, 800.0]
-                })
-                .with_min_inner_size([800.0, 500.0]),
+            viewport,
             ..Default::default()
         },
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
@@ -950,7 +1010,10 @@ fn main() -> eframe::Result {
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
-    browser::start();
+    json_lens::diagnostics::init();
+    if web_sys::window().is_some() {
+        browser::start();
+    }
 }
 
 #[cfg(test)]
