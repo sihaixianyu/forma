@@ -20,8 +20,77 @@ enum Request {
 enum RemoteRequest {
     Text(u64, Arc<String>, String),
     Right(u64, Arc<String>, String),
+    TextCached(u64, SourceRef, String),
+    RightCached(u64, SourceRef, String),
     Tree(u64, crate::web_tasks::DocRef, String),
     Pointer(u64, crate::web_tasks::DocRef, String),
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static SOURCE_KEYS: std::cell::RefCell<std::collections::HashMap<usize, (std::sync::Weak<String>, u64)>> = std::cell::RefCell::new(std::collections::HashMap::new());
+    static NEXT_SOURCE: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+    static SOURCES: std::cell::RefCell<std::collections::VecDeque<(u64, Arc<String>)>> = const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SourceRef {
+    key: u64,
+    text: Option<Arc<String>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl SourceRef {
+    fn new(text: &Arc<String>, force: bool) -> Self {
+        SOURCE_KEYS.with(|keys| {
+            let mut keys = keys.borrow_mut();
+            let address = Arc::as_ptr(text) as usize;
+            if let Some((weak, key)) = keys.get(&address)
+                && weak
+                    .upgrade()
+                    .is_some_and(|original| Arc::ptr_eq(&original, text))
+            {
+                return Self {
+                    key: *key,
+                    text: force.then(|| text.clone()),
+                };
+            }
+            keys.retain(|_, (weak, _)| weak.strong_count() > 0);
+            let key = NEXT_SOURCE.with(|next| {
+                let key = next.get();
+                next.set(key.checked_add(1).expect("search source IDs exhausted"));
+                key
+            });
+            keys.insert(address, (Arc::downgrade(text), key));
+            Self {
+                key,
+                text: Some(text.clone()),
+            }
+        })
+    }
+
+    fn resolve(self) -> std::result::Result<Arc<String>, String> {
+        SOURCES.with(|sources| {
+            let mut sources = sources.borrow_mut();
+            if let Some(index) = sources.iter().position(|(key, _)| *key == self.key) {
+                let cached = sources.remove(index).unwrap();
+                let text = cached.1.clone();
+                sources.push_back(cached);
+                log::debug!(target: "json_lens", "event=search_source cache_hit=true bytes={}", text.len());
+                return Ok(text);
+            }
+            let text = self.text.ok_or("cache_miss")?;
+            log::debug!(target: "json_lens", "event=search_source cache_hit=false bytes={}", text.len());
+            sources.push_back((self.key, text.clone()));
+            while sources.len() > 1
+                && (sources.len() > 4 || sources.iter().map(|(_, text)| text.len()).sum::<usize>() > 32 * 1024 * 1024)
+            {
+                sources.pop_front();
+            }
+            Ok(text)
+        })
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -31,6 +100,12 @@ pub(super) fn process_remote(bytes: &[u8]) -> std::result::Result<Vec<u8>, Strin
     let result = match request {
         RemoteRequest::Text(id, text, query) => Result::Text(id, find_text(&text, &query)),
         RemoteRequest::Right(id, text, query) => Result::Right(id, find_text(&text, &query)),
+        RemoteRequest::TextCached(id, source, query) => {
+            Result::Text(id, find_text(&source.resolve()?, &query))
+        }
+        RemoteRequest::RightCached(id, source, query) => {
+            Result::Right(id, find_text(&source.resolve()?, &query))
+        }
         RemoteRequest::Tree(id, reference, query) => {
             Result::Tree(id, find_tree(&reference.resolve()?.0.value, &query))
         }
@@ -46,8 +121,12 @@ impl crate::worker::Task<Result> for Request {
     const KIND: &'static str = "search";
     fn encode(&self, force: bool) -> std::result::Result<Vec<u8>, String> {
         let request = match self {
-            Self::Text(id, text, query) => RemoteRequest::Text(*id, text.clone(), query.clone()),
-            Self::Right(id, text, query) => RemoteRequest::Right(*id, text.clone(), query.clone()),
+            Self::Text(id, text, query) => {
+                RemoteRequest::TextCached(*id, SourceRef::new(text, force), query.clone())
+            }
+            Self::Right(id, text, query) => {
+                RemoteRequest::RightCached(*id, SourceRef::new(text, force), query.clone())
+            }
             Self::Tree(id, doc, query) => RemoteRequest::Tree(
                 *id,
                 crate::web_tasks::DocRef::new(doc, force),
@@ -164,7 +243,11 @@ pub struct Search {
     #[cfg(target_arch = "wasm32")]
     pub pointer_valid: bool,
     #[cfg(target_arch = "wasm32")]
-    pointer_state: (u64, String, std::sync::Weak<Document>),
+    pub pointer_pending: bool,
+    #[cfg(target_arch = "wasm32")]
+    pub pointer_reset: bool,
+    #[cfg(target_arch = "wasm32")]
+    pointer_state: (u64, String, std::sync::Weak<Document>, bool),
 }
 
 impl Search {
@@ -215,12 +298,21 @@ impl Search {
             #[cfg(target_arch = "wasm32")]
             pointer_valid: true,
             #[cfg(target_arch = "wasm32")]
-            pointer_state: (0, String::new(), std::sync::Weak::new()),
+            pointer_pending: false,
+            #[cfg(target_arch = "wasm32")]
+            pointer_reset: false,
+            #[cfg(target_arch = "wasm32")]
+            pointer_state: (0, String::new(), std::sync::Weak::new(), false),
         }
     }
 
     #[cfg(target_arch = "wasm32")]
     pub fn check_pointer(&mut self, doc: Arc<Document>, pointer: &str) {
+        let same_document = self
+            .pointer_state
+            .2
+            .upgrade()
+            .is_some_and(|old| Arc::ptr_eq(&old, &doc));
         if self.pointer_state.1 == pointer
             && self
                 .pointer_state
@@ -233,7 +325,10 @@ impl Search {
         self.pointer_state.0 += 1;
         self.pointer_state.1 = pointer.into();
         self.pointer_state.2 = Arc::downgrade(&doc);
+        self.pointer_state.3 = !same_document;
+        self.pointer_reset = false;
         self.pointer_valid = true;
+        self.pointer_pending = true;
         let _ =
             self.pointer_sender
                 .send(Request::Pointer(self.pointer_state.0, doc, pointer.into()));
@@ -293,7 +388,9 @@ impl Search {
                 }
                 #[cfg(target_arch = "wasm32")]
                 Result::Pointer(id, valid) if id == self.pointer_state.0 => {
-                    self.pointer_valid = valid
+                    self.pointer_valid = valid;
+                    self.pointer_pending = false;
+                    self.pointer_reset = !valid && self.pointer_state.3;
                 }
                 _ => {}
             }

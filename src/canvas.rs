@@ -2,6 +2,12 @@ use eframe::egui::{self, Color32, FontId, Pos2, Rect, Stroke, Vec2};
 use json_lens::graph::{Graph, NODE_WIDTH};
 use std::collections::{HashMap, HashSet};
 
+/// Trim monotone curve axes before tessellation, retaining the original curve
+/// within the viewport instead of flattening connections spanning a huge graph.
+#[path = "canvas/edge.rs"]
+mod edge;
+use edge::visible_edge;
+
 pub struct Canvas {
     zoom: f32,
     pan: Vec2,
@@ -78,6 +84,9 @@ impl Canvas {
             .collect();
         self.geometry_dirty = true;
         self.graph_id = 0;
+        // Rebuilt graphs can place the same selected node far from its old coordinates.
+        // Recenter the selection while retaining matching card positions and folds.
+        self.focus = Some(self.last_pointer.clone());
     }
     pub fn focus(&mut self, pointer: String) {
         self.focus = Some(pointer);
@@ -100,6 +109,37 @@ impl Canvas {
             clamp(self.pan.x, min.x, max.x, size.x),
             clamp(self.pan.y, min.y, max.y, size.y),
         );
+    }
+
+    fn keep_content_visible(&mut self, graph: &Graph, size: Vec2) {
+        let world = Rect::from_min_size((-self.pan / self.zoom).to_pos2(), size / self.zoom);
+        if self.viewport == world.expand(16.0 / self.zoom) {
+            return;
+        }
+        let node_rect = |index: usize| {
+            let node = &graph.nodes[index];
+            let pos = self
+                .positions
+                .get(&index)
+                .copied()
+                .unwrap_or(Vec2::new(node.x, node.y));
+            Rect::from_min_size(pos.to_pos2(), Vec2::new(NODE_WIDTH, node.height))
+        };
+        let candidates =
+            graph.viewport_nodes(world.min.x, world.min.y, world.width(), world.height());
+        let visible = candidates
+            .iter()
+            .chain(self.positions.keys())
+            .any(|index| !self.hidden[*index] && world.intersects(node_rect(*index)));
+        if !visible
+            && let Some(index) = graph
+                .container_for(&self.last_pointer)
+                .or_else(|| (!graph.nodes.is_empty()).then_some(0))
+        {
+            self.pan = size * 0.5 - node_rect(index).center().to_vec2() * self.zoom;
+            self.constrain_pan(size);
+            log::debug!(target: "json_lens", "event=graph_view_recovered reason=empty_viewport");
+        }
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, graph: &Graph, dark: bool, pointer: &mut String) {
@@ -248,6 +288,7 @@ impl Canvas {
             }
         }
         self.constrain_pan(rect.size());
+        self.keep_content_visible(graph, rect.size());
         let spacing = 24.0 * self.zoom.max(0.5);
         let board = Rect::from_min_max(
             rect.min + self.pan + self.bounds.min.to_vec2() * self.zoom - Vec2::splat(40.0),
@@ -273,7 +314,12 @@ impl Canvas {
             }
             x += spacing;
         }
-        painter.rect_stroke(board, 6, Stroke::new(1.0, border), egui::StrokeKind::Inside);
+        painter.rect_stroke(
+            board,
+            6,
+            Stroke::new(1.0_f32, border),
+            egui::StrokeKind::Inside,
+        );
         let world = Rect::from_min_size((-self.pan / self.zoom).to_pos2(), rect.size() / self.zoom)
             .expand(16.0 / self.zoom);
         if self.viewport != world {
@@ -316,6 +362,7 @@ impl Canvas {
             }
             self.edges.sort_unstable();
             self.edges.dedup();
+            log::debug!(target: "json_lens", "event=graph_view nodes={} visible={} edges={} zoom={:.3}", graph.nodes.len(), self.visible.len(), self.edges.len(), self.zoom);
         }
         let node_rect = |index: usize, pan: Vec2, positions: &HashMap<usize, Vec2>| {
             let node = &graph.nodes[index];
@@ -341,21 +388,26 @@ impl Canvas {
                     continue;
                 }
                 let bend = ((b.x - a.x).abs() * 0.5).max(30.0 * self.zoom);
-                painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                let curve = egui::epaint::CubicBezierShape::from_points_stroke(
                     [a, a + Vec2::new(bend, 0.0), b - Vec2::new(bend, 0.0), b],
                     false,
                     Color32::TRANSPARENT,
                     Stroke::new(1.5_f32, border),
-                ));
-                painter.add(egui::Shape::convex_polygon(
-                    vec![
-                        b,
-                        b + Vec2::new(-6.0, -3.0) * self.zoom,
-                        b + Vec2::new(-6.0, 3.0) * self.zoom,
-                    ],
-                    border,
-                    Stroke::NONE,
-                ));
+                );
+                if let Some(curve) = visible_edge(curve, rect.expand(8.0)) {
+                    painter.add(curve);
+                }
+                if rect.expand(8.0).contains(b) {
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            b,
+                            b + Vec2::new(-6.0, -3.0) * self.zoom,
+                            b + Vec2::new(-6.0, 3.0) * self.zoom,
+                        ],
+                        border,
+                        Stroke::NONE,
+                    ));
+                }
             }
         }
         let selected = graph.container_for(pointer);
@@ -629,287 +681,5 @@ impl Canvas {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use json_lens::graph::build_graph;
-    use serde_json::json;
-
-    fn frame(
-        ctx: &egui::Context,
-        canvas: &mut Canvas,
-        graph: &Graph,
-        pointer: &mut String,
-        time: f64,
-        events: Vec<egui::Event>,
-    ) {
-        let _ = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 800.0))),
-                time: Some(time),
-                events,
-                ..Default::default()
-            },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    canvas.show(ui, graph, false, pointer);
-                });
-            },
-        );
-    }
-
-    fn button(pos: Pos2, pressed: bool) -> egui::Event {
-        egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::default(),
-        }
-    }
-
-    #[test]
-    fn clicking_and_dragging_cards_updates_selection_and_position() {
-        let ctx = egui::Context::default();
-        let graph = build_graph(&json!({"child":{"name":"example"}}));
-        let mut canvas = Canvas::default();
-        let mut pointer = String::new();
-        frame(&ctx, &mut canvas, &graph, &mut pointer, 0.0, vec![]);
-        let node = &graph.nodes[1];
-        let pos = canvas.last_rect.min
-            + canvas.pan
-            + (Vec2::new(node.x, node.y) + Vec2::new(120.0, 20.0)) * canvas.zoom;
-        frame(
-            &ctx,
-            &mut canvas,
-            &graph,
-            &mut pointer,
-            0.1,
-            vec![egui::Event::PointerMoved(pos), button(pos, true)],
-        );
-        frame(
-            &ctx,
-            &mut canvas,
-            &graph,
-            &mut pointer,
-            0.2,
-            vec![button(pos, false)],
-        );
-        assert_eq!(pointer, "/child");
-        frame(
-            &ctx,
-            &mut canvas,
-            &graph,
-            &mut pointer,
-            1.0,
-            vec![button(pos, true)],
-        );
-        let moved = pos + Vec2::new(40.0, 30.0);
-        frame(
-            &ctx,
-            &mut canvas,
-            &graph,
-            &mut pointer,
-            1.1,
-            vec![egui::Event::PointerMoved(moved)],
-        );
-        frame(
-            &ctx,
-            &mut canvas,
-            &graph,
-            &mut pointer,
-            1.2,
-            vec![button(moved, false)],
-        );
-        assert!(canvas.positions[&1].x > node.x);
-        assert!(canvas.positions[&1].y > node.y);
-    }
-
-    #[test]
-    fn search_focus_unfolds_ancestors_and_keeps_the_container_visible() {
-        let ctx = egui::Context::default();
-        let graph = build_graph(&json!({"child":{"nested":{"name":"example"}}}));
-        let mut canvas = Canvas::default();
-        let mut pointer = String::new();
-        frame(&ctx, &mut canvas, &graph, &mut pointer, 0.0, vec![]);
-        canvas.collapsed.insert(0);
-        canvas.collapsed.insert(1);
-        pointer = "/child/nested/name".into();
-        frame(&ctx, &mut canvas, &graph, &mut pointer, 0.1, vec![]);
-        assert!(canvas.collapsed.is_empty());
-        let node = &graph.nodes[2];
-        let center = canvas.last_rect.min
-            + canvas.pan
-            + Vec2::new(node.x + NODE_WIDTH * 0.5, node.y + node.height * 0.5) * canvas.zoom;
-        assert!(canvas.last_rect.contains(center));
-    }
-
-    #[test]
-    fn clicking_a_value_selects_its_exact_pointer() {
-        let ctx = egui::Context::default();
-        let graph = build_graph(&json!({"child":{"name":"example"}}));
-        let mut canvas = Canvas::default();
-        let mut pointer = String::new();
-        frame(&ctx, &mut canvas, &graph, &mut pointer, 0.0, vec![]);
-        let node = &graph.nodes[1];
-        let position = canvas.last_rect.min
-            + canvas.pan
-            + Vec2::new(node.x + 140.0, node.y + 64.0) * canvas.zoom;
-        frame(
-            &ctx,
-            &mut canvas,
-            &graph,
-            &mut pointer,
-            0.1,
-            vec![egui::Event::PointerMoved(position), button(position, true)],
-        );
-        frame(
-            &ctx,
-            &mut canvas,
-            &graph,
-            &mut pointer,
-            0.2,
-            vec![button(position, false)],
-        );
-        assert_eq!(pointer, "/child/name");
-    }
-
-    #[test]
-    fn document_updates_preserve_viewport_and_matching_card_state() {
-        let old = build_graph(&json!({"child":{"name":"old"}}));
-        let new = build_graph(&json!({"other":{}, "child":{"name":"new"}}));
-        let mut canvas = Canvas::default();
-        let index = old.container_for("/child").unwrap();
-        canvas.positions.insert(index, Vec2::new(400.0, 80.0));
-        canvas.collapsed.insert(index);
-        canvas.pan = Vec2::new(100.0, 200.0);
-        canvas.zoom = 0.9;
-        canvas.reconcile(&old, &new);
-        let index = new.container_for("/child").unwrap();
-        assert_eq!(canvas.positions[&index], Vec2::new(400.0, 80.0));
-        assert!(canvas.collapsed.contains(&index));
-        assert_eq!(canvas.pan, Vec2::new(100.0, 200.0));
-        assert_eq!(canvas.zoom, 0.9);
-    }
-
-    #[test]
-    fn modified_wheel_zooms_at_pointer_and_plain_wheel_pans() {
-        for modifier in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
-            let ctx = egui::Context::default();
-            let value = serde_json::Value::Object(
-                (0..12)
-                    .map(|index| {
-                        (
-                            format!("branch{index}"),
-                            json!({"child":{"nested":{"name":"example"}}}),
-                        )
-                    })
-                    .collect(),
-            );
-            let graph = build_graph(&value);
-            let mut canvas = Canvas::default();
-            let mut pointer = String::new();
-            frame(&ctx, &mut canvas, &graph, &mut pointer, 0.0, vec![]);
-            canvas.zoom = 1.0;
-            canvas.fit = false;
-            canvas.pan = canvas.last_rect.size() * 0.5 - canvas.bounds.center().to_vec2();
-            let mouse = canvas.last_rect.center();
-            let old_zoom = canvas.zoom;
-            let world = (mouse - canvas.last_rect.min - canvas.pan) / canvas.zoom;
-            let wheel = |modifiers| egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                delta: Vec2::new(0.0, 40.0),
-                modifiers,
-            };
-            frame(
-                &ctx,
-                &mut canvas,
-                &graph,
-                &mut pointer,
-                0.1,
-                vec![egui::Event::PointerMoved(mouse), wheel(modifier)],
-            );
-            assert!(canvas.zoom > old_zoom);
-            let world_after = (mouse - canvas.last_rect.min - canvas.pan) / canvas.zoom;
-            assert!((world_after - world).length() < 0.01);
-            let pan = canvas.pan;
-            let zoom = canvas.zoom;
-            frame(
-                &ctx,
-                &mut canvas,
-                &graph,
-                &mut pointer,
-                0.2,
-                vec![wheel(egui::Modifiers::NONE)],
-            );
-            assert_eq!(canvas.zoom, zoom);
-            assert!((canvas.pan.y - pan.y - 40.0).abs() < 0.01);
-            let pan = canvas.pan;
-            frame(
-                &ctx,
-                &mut canvas,
-                &graph,
-                &mut pointer,
-                0.3,
-                vec![wheel(egui::Modifiers::SHIFT)],
-            );
-            assert!((canvas.pan.x - pan.x - 40.0).abs() < 0.01);
-            assert_eq!(canvas.pan.y, pan.y);
-        }
-    }
-
-    #[test]
-    fn repeated_extreme_wheel_pan_cannot_leave_the_finite_graph_board() {
-        let ctx = egui::Context::default();
-        let graph = build_graph(&json!({"child":{"nested":{"name":"example"}}}));
-        let mut canvas = Canvas::default();
-        let mut pointer = String::new();
-        frame(&ctx, &mut canvas, &graph, &mut pointer, 0.0, vec![]);
-        canvas.zoom = 2.5;
-        canvas.fit = false;
-        let mouse = canvas.last_rect.center();
-        for (step, direction) in [1.0, -1.0].into_iter().enumerate() {
-            let mut previous = None;
-            for repeat in 0..3 {
-                frame(
-                    &ctx,
-                    &mut canvas,
-                    &graph,
-                    &mut pointer,
-                    0.1 + (step * 3 + repeat) as f64 * 0.1,
-                    vec![
-                        egui::Event::PointerMoved(mouse),
-                        egui::Event::MouseWheel {
-                            unit: egui::MouseWheelUnit::Point,
-                            delta: Vec2::splat(direction * 100_000.0),
-                            modifiers: egui::Modifiers::NONE,
-                        },
-                    ],
-                );
-                let content = Rect::from_min_max(
-                    canvas.last_rect.min + canvas.pan + canvas.bounds.min.to_vec2() * canvas.zoom,
-                    canvas.last_rect.min + canvas.pan + canvas.bounds.max.to_vec2() * canvas.zoom,
-                );
-                assert!(content.intersects(canvas.last_rect));
-                if let Some(previous) = previous {
-                    assert_eq!(canvas.pan, previous);
-                }
-                previous = Some(canvas.pan);
-            }
-        }
-        canvas.reset_layout();
-        frame(&ctx, &mut canvas, &graph, &mut pointer, 1.0, vec![]);
-        let pan = canvas.pan;
-        frame(
-            &ctx,
-            &mut canvas,
-            &graph,
-            &mut pointer,
-            1.1,
-            vec![egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                delta: Vec2::splat(100_000.0),
-                modifiers: egui::Modifiers::NONE,
-            }],
-        );
-        assert_eq!(canvas.pan, pan);
-    }
-}
+#[path = "canvas/tests.rs"]
+mod tests;

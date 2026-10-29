@@ -16,6 +16,17 @@ def main():
     destination = ROOT / "packaging/icons"
     destination.mkdir(parents=True, exist_ok=True)
     svg = ElementTree.parse(ROOT / "packaging/json-lens.svg").getroot()
+    # Desktop tiles occupy 80% of the canvas, matching neighboring Dock icons.
+    # The web logo stays full bleed; only the generated desktop assets get padding.
+    namespace = "{http://www.w3.org/2000/svg}"
+    tile = svg.find(namespace + "rect")
+    if tile is not None:
+        tile.set("rx", "28")
+    artwork = ElementTree.Element(namespace + "g", {"transform": "translate(12.8 12.8) scale(0.8)"})
+    for child in list(svg):
+        svg.remove(child)
+        artwork.append(child)
+    svg.append(artwork)
     # Keep the viewBox and render at twice the largest exported size.
     svg.set("width", "2048")
     svg.set("height", "2048")

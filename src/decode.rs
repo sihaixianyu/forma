@@ -1,8 +1,10 @@
 use base64::{Engine, engine::general_purpose};
 
+pub const MAX_PREVIEW_BYTES: usize = 64 * 1024;
+
 /// Plausible text decodings only; binary data and plain strings do not get a popup.
 pub fn previews(value: &str) -> Vec<(&'static str, String)> {
-    if value.len() > 64 * 1024 {
+    if value.len() > MAX_PREVIEW_BYTES {
         return Vec::new();
     }
     let mut result = Vec::new();

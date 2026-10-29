@@ -44,6 +44,7 @@ jobs:
       - name: Build static site
         env:
           BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          JSON_LENS_BUILD_REVISION: ${{ github.sha }}
         run: trunk build --release --public-url "${BASE_PATH}/"
       - name: Upload site
         uses: actions/upload-pages-artifact@v3

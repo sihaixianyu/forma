@@ -79,6 +79,7 @@ enum RemoteJob {
     Transform(DocRef, Format),
     Locate(DocRef, String),
     SourcePointer(DocRef, usize),
+    FocusGraph(DocRef, String),
     Inspect(DocRef, String),
     Edit(DocRef, String, String, bool),
     Import(Arc<String>, String),
@@ -94,6 +95,9 @@ impl RemoteJob {
             Job::Locate(doc, pointer) => Self::Locate(DocRef::new(doc, force), pointer.clone()),
             Job::SourcePointer(doc, offset) => {
                 Self::SourcePointer(DocRef::new(doc, force), *offset)
+            }
+            Job::FocusGraph(doc, pointer) => {
+                Self::FocusGraph(DocRef::new(doc, force), pointer.clone())
             }
             Job::Inspect(doc, pointer) => Self::Inspect(DocRef::new(doc, force), pointer.clone()),
             Job::Edit(doc, pointer, replacement, rename) => Self::Edit(
@@ -120,6 +124,7 @@ impl RemoteJob {
             }
             Self::Locate(doc, pointer) => Job::Locate(doc.resolve()?.0, pointer),
             Self::SourcePointer(doc, offset) => Job::SourcePointer(doc.resolve()?.0, offset),
+            Self::FocusGraph(doc, pointer) => Job::FocusGraph(doc.resolve()?.0, pointer),
             Self::Inspect(doc, pointer) => Job::Inspect(doc.resolve()?.0, pointer),
             Self::Edit(doc, pointer, replacement, rename) => {
                 Job::Edit(doc.resolve()?.0, pointer, replacement, rename)
@@ -146,6 +151,10 @@ enum Reply {
         graph: Option<Arc<Graph>>,
     },
     Invalid(Option<Arc<String>>, String),
+    InvalidComparison(
+        Option<crate::syntax::SyntaxError>,
+        Option<crate::syntax::SyntaxError>,
+    ),
     Comparison(
         Vec<json_lens::Difference>,
         Arc<json_lens::alignment::Alignment>,
@@ -159,6 +168,7 @@ enum Reply {
     ),
     Located(std::ops::Range<usize>),
     SourcePointer(Option<String>),
+    FocusedGraph(Arc<Graph>, String),
     Editing(crate::ui::EditDialog),
 }
 #[derive(Serialize, Deserialize)]
@@ -174,6 +184,7 @@ fn source(job: &Job) -> Option<Arc<String>> {
         Job::Transform(doc, _, _)
         | Job::Locate(doc, _)
         | Job::SourcePointer(doc, _)
+        | Job::FocusGraph(doc, _)
         | Job::Inspect(doc, _)
         | Job::Edit(doc, ..) => Some(doc.text.clone()),
         _ => None,
@@ -246,10 +257,12 @@ fn process_request(bytes: &[u8]) -> Result<Vec<u8>, String> {
         Output::Comparison(diffs, alignment, left, right) => {
             Reply::Comparison(diffs, alignment, left, right)
         }
+        Output::InvalidComparison(left, right) => Reply::InvalidComparison(left, right),
         Output::RightText(text) => Reply::RightText(text),
         Output::DiffLocation(left, right) => Reply::DiffLocation(left, right),
         Output::Located(range) => Reply::Located(range),
         Output::SourcePointer(pointer) => Reply::SourcePointer(pointer),
+        Output::FocusedGraph(graph, pointer) => Reply::FocusedGraph(graph, pointer),
         Output::Editing(dialog) => Reply::Editing(dialog),
     });
     let response = Response {
@@ -307,10 +320,12 @@ impl crate::worker::Task<Completed> for Work {
                     }
                     Output::Comparison(diffs, alignment, left, right)
                 }
+                Reply::InvalidComparison(left, right) => Output::InvalidComparison(left, right),
                 Reply::RightText(text) => Output::RightText(text),
                 Reply::DiffLocation(left, right) => Output::DiffLocation(left, right),
                 Reply::Located(range) => Output::Located(range),
                 Reply::SourcePointer(pointer) => Output::SourcePointer(pointer),
+                Reply::FocusedGraph(graph, pointer) => Output::FocusedGraph(graph, pointer),
                 Reply::Editing(dialog) => Output::Editing(dialog),
             })
         });

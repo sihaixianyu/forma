@@ -11,7 +11,7 @@ pub mod search;
 
 pub use parser::parse_json;
 
-pub const EDIT_LIMIT: usize = 1024 * 1024;
+pub const EDIT_LIMIT: usize = 8 * 1024 * 1024;
 pub const PREVIEW_LIMIT: usize = 16 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

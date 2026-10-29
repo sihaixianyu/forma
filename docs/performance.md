@@ -178,9 +178,10 @@ The bottleneck was repeated editor layout: the formatted case logged approximate
 82 ms per cached layout before the change, versus about 19 ms for the largest
 Worker result decode. The editor now builds only the requested wrapped layout,
 coalesces adjacent syntax sections of the same color, caches unchanged Compare
-alignment, and stops gutter painting once rows pass the viewport. It still
-resolves layouts through egui's font cache so theme/font-atlas changes remain
-correct. Full source, soft-wrap, editing, precision and undo are preserved.
+alignment, and stops gutter painting once rows pass the viewport. Unchanged
+galleys are retained; a tiny font-cache sentinel detects atlas/font rebuilds
+without rehashing full documents every frame. Full source, soft-wrap, editing,
+precision and undo are preserved.
 
 To reproduce against an ordinary release build with the preview URL and an
 isolated Chrome remote-debugging session on port 9227:
@@ -197,6 +198,73 @@ workspace and tessellation in Graph and Compare, excluding window/GPU rendering:
 ```sh
 cargo run --release --locked --features bench-ui -- --bench-editor
 ```
+
+## Large-document Graph interaction
+
+The default editable size is now 8 MiB, so a million-character UTF-8 document
+does not automatically switch to a read-only 16 KiB preview. Explicitly enabling
+full editing on a larger document also survives automatic processing and
+formatting. Cold layout and rebuilding after edits still depend on document
+shape and size; the 8 MiB threshold is not a latency guarantee.
+
+The initial graph keeps its 10,000-card preview limit. Source selection or a
+JSON Pointer outside that preview now requests a bounded local graph around
+the selected container, using the full cached document in the Worker. Omitted
+scalar fields are added to the containing card's visible rows. Original JSON
+pointers, array counts and precise values are retained; Root restores the
+overview. This avoids increasing every graph to the full document size just
+to navigate to a late item.
+
+Root always recenters, including when its path is already empty. Pan and zoom
+recover the selected node if the entire viewport would contain no graph nodes.
+Invalid paths keep the graph visible and show a compact status message.
+Very long graph connections are trimmed to their visible curve interval before
+tessellation. Graph payloads also omit raw strings larger than the existing
+64 KiB hover-decoding limit; the complete values remain in the document.
+
+A real Chrome check with 1,066,002 characters verified an edit after import,
+plain-wheel pan, modified-wheel zoom, background dragging, selection of
+`/12999/name` beyond the initial preview, return to Root, and a click in the
+source editor's last visible object. No measured view
+had zero visible graph nodes. Wheel and zoom frame gaps reached a maximum of
+16.8 ms in this smoke check. [Recorded Graph check](performance-graph-results.json).
+These are observations for this input, browser and machine, not a universal
+frame-rate guarantee.
+
+```sh
+node bench/graph-browser.mjs after
+```
+
+## Browser search responsiveness
+
+The deployed GitHub Pages app was checked with a 1,000,052-character JSON array
+containing 8,850 occurrences of `Lens`. Cmd+F did not cancel browser Find, and
+typing a query plus scrolling caused a 166.6 ms maximum frame gap. In the local
+release with the search fix, browser Find is cancelled, the same flow had a
+16.8 ms maximum gap, and no frames exceeded 50 ms. Both checks used the same
+Chrome session, viewport and DEBUG logging. This is a smoke observation, not
+a median throughput benchmark, and the fixed build has not been published by
+this check. Input loading/pasting finishes before the measured search interval.
+[Recorded search checks](performance-search-results.json).
+
+Full-document literal search and result counting run in the Worker. Cached
+source IDs avoid retransmitting the full file for each query; eviction requests
+one source retry. Highlight painting uses UTF-8 row offsets and visits only
+visible rows. Query changes no longer re-run syntax parsing, split all layout
+sections or rebuild the full text galley. The currently selected result gets a
+stronger marker. Cmd/Ctrl+F is cancelled synchronously in document capture,
+covering the canvas and the hidden IME input; it still reaches the app.
+
+```sh
+node bench/search-browser.mjs after
+# To inspect the deployed version:
+node bench/search-browser.mjs pages https://sihaixianyu.github.io/json-lens/
+```
+
+Pages builds set `JSON_LENS_BUILD_REVISION` to the commit SHA. After startup,
+the document element exposes `data-build-revision`, `data-build-mode` and
+`data-wasm-simd`, allowing release/SIMD and deployed revision checks. The Pages
+workflow continues to use `trunk build --release` and the shared SIMD config.
 
 ## Reproduce processing measurements
 
@@ -216,3 +284,12 @@ The original processing and graph benchmarks remain available:
 cargo bench --bench processing --locked
 cargo bench --bench workspace --locked
 ```
+
+## Editor cache memory
+
+The editor stores its syntax text in the cached layout job and reuses that text
+for cache comparisons, removing a second full source string per editor cache.
+Undo history tracks retained byte counts incrementally instead of summing every
+snapshot after each edit. Repeated actions reuse unchanged dirty source text.
+These changes reduce allocations and history accounting work; no additional
+frame-time speedup is claimed without a new benchmark.

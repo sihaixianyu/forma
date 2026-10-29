@@ -56,6 +56,13 @@ try {
       const pointer=await request('search',{Pointer:[1,{id,text:null},'/a/1']});if(pointer.Pointer[1]!==true)throw new Error('Pointer validation failed');
       const missing=await request('search',{Pointer:[2,{id,text:null},'/missing']});if(missing.Pointer[1]!==false)throw new Error('Invalid pointer accepted');
       const tree=await request('search',{Tree:[3,{id,text:null},'123456789012345678901234567890']});if(tree.Tree[1].total!==1)throw new Error('Tree search failed');
+      const cachedText=await request('search',{TextCached:[10,{key:900,text:input},'5Lit']});if(cachedText.Text[1].total!==1)throw new Error('Cached text search failed');
+      const reusedText=await request('search',{TextCached:[11,{key:900,text:null},'encoded']});if(reusedText.Text[1].total!==1)throw new Error('Search source token reuse failed');
+      const cachedRight=await request('search',{RightCached:[12,{key:900,text:null},'5Lit']});if(cachedRight.Right[1].total!==1)throw new Error('Right search source token failed');
+      for(let key=901;key<=904;key++)await request('search',{TextCached:[key,{key,text:'source '+key},'source']});
+      let searchMiss=false;try{await request('search',{TextCached:[13,{key:900,text:null},'5Lit']});}catch(error){searchMiss=error.message==='cache_miss';}
+      if(!searchMiss)throw new Error('Evicted search source did not request hydration');
+      const searchHydrated=await request('search',{TextCached:[14,{key:900,text:input},'5Lit']});if(searchHydrated.Text[1].total!==1)throw new Error('Search hydration failed');
       const inspect=unwrap(await work({Inspect:[{id,text:null},'/z']}));if(inspect.Editing.json!=='123456789012345678901234567890')throw new Error('Inspect precision failed');
       const edited=unwrap(await work({Edit:[{id,text:null},'/z','999999999999999999999999999999',false]}));if(!edited.Document.text.includes('999999999999999999999999999999'))throw new Error('Edit failed');
       const renamed=unwrap(await work({Edit:[{id:edited.Document.id,text:null},'/z','renamed',true]}));
@@ -64,6 +71,9 @@ try {
       const nested=unwrap(await work({Process:[JSON.stringify({nested:JSON.stringify({x:1})}),'Nested']}));if(!nested.Document.text.includes('"x"'))throw new Error('Nested expansion failed');
       const cmp=unwrap(await work({Compare:[input,input.replace('5Lit5paH','SGVsbG8=')]}));if(cmp.Comparison[0].length!==1)throw new Error('Compare failed');
       const invalid=unwrap(await work({Process:['{bad}','Keep']}));if(!invalid.Invalid)throw new Error('Invalid input accepted');
+      const invalidPair=unwrap(await work({Compare:['{bad}','{\\n  "right": }']}));
+      if(!invalidPair.InvalidComparison?.[0]||!invalidPair.InvalidComparison?.[1])throw new Error('Both invalid inputs must return diagnostics');
+      if(invalidPair.InvalidComparison[1].location[0]!==2)throw new Error('Right syntax location must survive Worker serialization');
       const row='{"id":123456,"name":"JSON Lens 中文 🚀","active":true,"values":[1,2,3,4]}';
       const text='['+Array(Math.floor(20*1048576/(new TextEncoder().encode(row).length+1))).fill(row).join(',')+']';
       const payload=new TextEncoder().encode(JSON.stringify({job:{Process:[text,'Keep']},revision:2,user_action:true}));
@@ -76,6 +86,12 @@ try {
       const doc=unwrap(JSON.parse(new TextDecoder().decode(reply.payload))).Document;
       if(!doc.graph.truncated||doc.graph.nodes.length!==10000)throw new Error('Graph limit failed');
       if(doc.text!==null)throw new Error('Unchanged source copied back');
+      const tailOffset=1+20000*(new TextEncoder().encode(row).length+1)+row.indexOf('"name"')+8;
+      const tailPointer=unwrap(await work({SourcePointer:[{id:doc.id,text:null},tailOffset]}));if(tailPointer.SourcePointer!=='/20000/name')throw new Error('Source navigation did not locate an omitted tail node');
+      const focused=unwrap(await work({FocusGraph:[{id:doc.id,text:null},tailPointer.SourcePointer]}));
+      if(focused.FocusedGraph[0].nodes[0].pointer!=='/20000'||!focused.FocusedGraph[0].nodes[0].rows.some(row=>row.pointer==='/20000/name'))throw new Error('Graph focus did not reach beyond the preview limit');
+      const rooted=unwrap(await work({FocusGraph:[{id:doc.id,text:null},'']}));
+      if(rooted.FocusedGraph[0].nodes[0].pointer!==''||rooted.FocusedGraph[0].nodes.length!==10000)throw new Error('Root graph was not restored');
       if(ticks<3)throw new Error('Main-thread heartbeat did not run during processing');
       let cacheMiss=false;
       try { await work({Transform:[{id:first.Document.id,text:null},'Pretty']}); } catch(error) { cacheMiss=error.message==='cache_miss'; }
@@ -83,7 +99,7 @@ try {
       const hydrated=unwrap(await work({Transform:[{id:first.Document.id,text:input},'Pretty']}));
       if(!hydrated.Document.text.includes('123456789012345678901234567890'))throw new Error('Cache hydration changed data');
       if(!messages.some(s=>s.includes('realm=worker')&&s.includes('parser=sonic')))throw new Error('Worker execution not logged');
-      return {checks:16,input_mib:20,roundtrip_ms:roundtrip,heartbeat_ticks:ticks,max_heartbeat_gap_ms:maxGap,cross_origin_isolated:crossOriginIsolated,worker_logs:messages};
+      return {checks:24,input_mib:20,roundtrip_ms:roundtrip,heartbeat_ticks:ticks,max_heartbeat_gap_ms:maxGap,cross_origin_isolated:crossOriginIsolated,worker_logs:messages};
     }finally{w.terminate();}
   })()`);
   console.log(JSON.stringify({...result,worker_logs:undefined},null,2));
@@ -96,8 +112,12 @@ try {
   const click=async(x,y)=>{await call('Input.dispatchMouseEvent',{type:'mousePressed',x,y,button:'left',clickCount:1});await call('Input.dispatchMouseEvent',{type:'mouseReleased',x,y,button:'left',clickCount:1});await pause(120);};
   const key=async(key,code,modifiers=0)=>{await call('Input.dispatchKeyEvent',{type:'keyDown',key,code,modifiers,windowsVirtualKeyCode:key.length===1?key.toUpperCase().charCodeAt(0):undefined});await call('Input.dispatchKeyEvent',{type:'keyUp',key,code,modifiers});};
   const paste=async text=>evaluate(`(()=>{const d=new DataTransfer();d.setData('text/plain',${JSON.stringify(text)});document.dispatchEvent(new ClipboardEvent('paste',{clipboardData:d,bubbles:true,cancelable:true}));})()`);
+  await evaluate(`window.findKeyEvents=[];document.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='f')findKeyEvents.push({prevented:event.defaultPrevented,meta:event.metaKey,ctrl:event.ctrlKey,target:event.target.tagName});},true)`);
   const left='[{"z":123456789012345678901234567890,"a":"中文","encoded":"5Lit5paH"}]';
+  await click(800,125);await key('a','KeyA',2);await paste('/workspace');await pause(250);
+  const beforeGraphReplacement=logs.length;
   await click(300,300);await key('a','KeyA',2);await paste(left);await pause(700);
+  if(!logs.slice(beforeGraphReplacement).some(line=>/event=graph_view nodes=2 visible=[1-9]/.test(line)))throw new Error('Graph disappeared after replacing a selected document');
   await key('s','KeyS',2);await pause(600);
   if(!logs.some(line=>line.includes('event=graph_cache reused=true')))throw new Error('App format cache missed');
   await call('Browser.grantPermissions',{origin:new URL(appUrl).origin,permissions:['clipboardReadWrite','clipboardSanitizedWrite']});
@@ -131,8 +151,21 @@ try {
   await key('y','KeyY',2);await pause(80);
   if(!(await copyEditor()).includes('\n'))throw new Error('Right editor redo failed');
   await key('f','KeyF',2);await pause(120);await paste('中文');await pause(500);await key('f','KeyF',2);
+  for(const modifiers of [4,2]){
+    await key('f','KeyF',modifiers);await pause(150);await paste('right-find');await pause(200);
+    const query=await copyEditor();if(query!=='right-find')throw new Error('Right Find did not reopen with a cleared query: '+JSON.stringify(query));
+    await key('f','KeyF',modifiers);await pause(150);
+  }
+  await click(300,300);
+  for(const modifiers of [4,2]){
+    await key('f','KeyF',modifiers);await pause(150);await paste('left-find');await pause(200);
+    if(await copyEditor()!=='left-find')throw new Error('Left Find did not reopen with a cleared query');
+    await key('f','KeyF',modifiers);await pause(150);
+  }
+  const findEvents=await evaluate('findKeyEvents');
+  if(findEvents.length<10||findEvents.some(event=>!event.prevented)||!findEvents.some(event=>event.meta)||!findEvents.some(event=>event.ctrl))throw new Error('Browser Find shortcut was not cancelled for Cmd and Ctrl: '+JSON.stringify(findEvents));
   if(!logs.some(line=>line.includes('realm=worker')&&line.includes('stage=search_text')))throw new Error('App source search did not use Worker');
-  if(logs.some(line=>line.includes('realm=main')&&/stage=(parse_sonic|parse_serde|graph_build|compare_walk|search_tree)/.test(line)))throw new Error('CPU processing leaked onto main thread');
+  if(logs.some(line=>line.includes('realm=main')&&/stage=(parse_sonic|parse_serde|graph_build|compare_walk|search_tree|search_text)/.test(line)))throw new Error('CPU processing leaked onto main thread');
   if(errors.length)throw new Error(JSON.stringify(errors));
   await writeFile('/private/tmp/json-lens-worker-ui.log',logs.filter(line=>line.includes('[JSON Lens')).join('\n')+'\n');
   console.log('App editor, cached Format, exact-number download, automatic Compare and search passed');

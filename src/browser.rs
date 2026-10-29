@@ -89,6 +89,33 @@ fn download(data: &[u8], name: &str) -> Result<(), wasm_bindgen::JsValue> {
     result
 }
 
+fn install_find_shortcut(document: &web_sys::Document) -> Result<(), wasm_bindgen::JsValue> {
+    use wasm_bindgen::{JsCast, closure::Closure};
+    let page = document.clone();
+    let handler =
+        Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |event: web_sys::KeyboardEvent| {
+            if (event.meta_key() || event.ctrl_key())
+                && !event.alt_key()
+                && !event.is_composing()
+                && (event.key().eq_ignore_ascii_case("f")
+                    || (event.shift_key() && event.key().eq_ignore_ascii_case("e")))
+                && page.get_element_by_id("loading").is_none()
+                && page.get_element_by_id("rfd-card").is_none()
+            {
+                // Reserve app shortcuts synchronously while letting egui receive the event.
+                // Document capture also covers eframe's hidden IME text input.
+                event.prevent_default();
+            }
+        });
+    document.add_event_listener_with_callback_and_bool(
+        "keydown",
+        handler.as_ref().unchecked_ref(),
+        true,
+    )?;
+    handler.forget(); // One listener for the lifetime of this page.
+    Ok(())
+}
+
 pub fn start() {
     use wasm_bindgen::JsCast;
     wasm_bindgen_futures::spawn_local(async {
@@ -108,6 +135,31 @@ pub fn start() {
             .await
         {
             Ok(()) => {
+                if let Err(error) = install_find_shortcut(&document) {
+                    web_sys::console::error_1(&error);
+                }
+                if let Some(root) = document.document_element() {
+                    let _ = root.set_attribute(
+                        "data-build-revision",
+                        option_env!("JSON_LENS_BUILD_REVISION").unwrap_or("local"),
+                    );
+                    let _ = root.set_attribute(
+                        "data-build-mode",
+                        if cfg!(debug_assertions) {
+                            "debug"
+                        } else {
+                            "release"
+                        },
+                    );
+                    let _ = root.set_attribute(
+                        "data-wasm-simd",
+                        if cfg!(target_feature = "simd128") {
+                            "true"
+                        } else {
+                            "false"
+                        },
+                    );
+                }
                 if let Some(loading) = document.get_element_by_id("loading") {
                     loading.remove();
                 }

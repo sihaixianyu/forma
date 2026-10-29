@@ -144,6 +144,8 @@ def main():
     args = parser.parse_args()
     if not re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", args.version):
         parser.error("version must be a semantic version without leading v")
+    if args.platform == "macos" and args.arch != "aarch64":
+        parser.error("macOS packages support Apple Silicon (aarch64) only")
     if args.platform != "macos" and args.arch != "x86_64":
         parser.error("Linux and Windows packages currently support x86_64")
     binary = args.binary.resolve(strict=True)

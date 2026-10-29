@@ -55,10 +55,18 @@ from UI layout and message handling. The analyzer groups stages by realm.
 | `graph_build`, `graph_cache` | Graph construction versus reuse |
 | `compare_walk`, `compare_alignment` | Finding value differences and aligning text rows |
 | `search_text`, `search_tree` | Source and graph search |
+| `search_highlights` | Main-thread visible-match painting and row indexing |
 | `syntax_layout` | Syntax layout cache misses |
 | `editor_layout` | Editor layout calls exceeding 8 ms; fast calls are omitted |
 | `job_coalesced`, `queue_coalesced`, `stale_result` | Superseded work and results discarded after editing |
 | `execute_job`, `worker_job`, `process`, `parse_json` | Inclusive totals containing other stages |
+
+`event=graph_view` reports total nodes, visible nodes and visible edges when the
+graph viewport changes. Invalid navigation paths keep the graph visible; after
+a document update removes the selected path, navigation returns to the root.
+`event=graph_view_recovered` identifies recovery from an empty viewport.
+`operation="Focus graph"` builds a local view for a pointer omitted from the
+initial preview; this work runs off the UI thread on both platforms.
 
 Start with a slow job ID, then compare its child stages. A large `queue_ms`
 with short processing suggests scheduling/backlog. A large `convert_dom`

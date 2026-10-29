@@ -1,5 +1,5 @@
 use json_lens::{
-    graph::{NODE_WIDTH, build_graph},
+    graph::{NODE_LIMIT, NODE_WIDTH, build_graph, build_graph_at},
     search::{TEXT_LIMIT, find_text, find_tree},
 };
 use serde_json::json;
@@ -61,6 +61,91 @@ fn graph_connects_containers_and_locates_scalar_search_hits() {
     let items = graph.container_for("/items").unwrap();
     assert_eq!(graph.nodes[first].parent, Some(items));
     assert_eq!(graph.nodes[second].parent, Some(items));
+}
+
+#[test]
+fn graph_focus_reaches_containers_after_the_preview_limit() {
+    let value = json!(
+        (0..NODE_LIMIT + 500)
+            .map(|i| json!({"id": i, "name": "tail value"}))
+            .collect::<Vec<_>>()
+    );
+    let graph = build_graph(&value);
+    let pointer = format!("/{}/name", NODE_LIMIT + 499);
+    assert!(graph.truncated);
+    assert!(!graph.covers_pointer(&pointer));
+    let focused = build_graph_at(&value, &pointer).unwrap();
+    assert!(focused.covers_pointer(&pointer));
+    assert_eq!(focused.nodes[0].pointer, format!("/{}", NODE_LIMIT + 499));
+    assert_eq!(focused.nodes.len(), 1);
+    assert!(!focused.covers_pointer(""));
+    assert!(build_graph_at(&value, "").unwrap().covers_pointer(""));
+}
+
+#[test]
+fn graph_focus_shows_omitted_scalars_without_losing_array_semantics() {
+    let value = json!({"a/b~c": (0..1000).collect::<Vec<_>>()});
+    let pointer = "/a~1b~0c/999";
+    let graph = build_graph(&value);
+    assert!(!graph.covers_pointer(pointer));
+    let focused = build_graph_at(&value, pointer).unwrap();
+    assert_eq!(focused.nodes[0].pointer, "/a~1b~0c");
+    assert_eq!(focused.nodes[0].title, "a/b~c");
+    assert_eq!(focused.nodes[0].kind, "array");
+    assert_eq!(focused.nodes[0].count, 1000);
+    assert_eq!(focused.nodes[0].rows.len(), 8);
+    let row = focused.nodes[0]
+        .rows
+        .iter()
+        .find(|row| row.pointer == pointer)
+        .unwrap();
+    assert_eq!(row.key, "999");
+    assert_eq!(row.value, "999");
+    assert!(build_graph_at(&value, "/missing").is_none());
+}
+
+#[test]
+fn graph_does_not_copy_megabyte_strings_for_unsupported_hover_previews() {
+    let value = json!({"large": "x".repeat(1_000_000), "encoded": "5Lit5paH"});
+    let graph = build_graph(&value);
+    let root = &graph.nodes[0];
+    assert!(
+        root.rows
+            .iter()
+            .find(|row| row.key == "large")
+            .unwrap()
+            .string
+            .is_none()
+    );
+    assert_eq!(
+        root.rows
+            .iter()
+            .find(|row| row.key == "encoded")
+            .unwrap()
+            .string
+            .as_deref(),
+        Some("5Lit5paH")
+    );
+    assert_eq!(value["large"].as_str().unwrap().len(), 1_000_000);
+}
+
+#[test]
+fn graph_focus_retains_preview_bounds_and_valid_original_pointers() {
+    let value =
+        json!({"branch": (0..NODE_LIMIT + 10).map(|i| json!({"name": i})).collect::<Vec<_>>()});
+    let graph = build_graph_at(&value, "/branch").unwrap();
+    assert_eq!(graph.nodes.len(), NODE_LIMIT);
+    assert!(graph.truncated);
+    for (index, node) in graph.nodes.iter().enumerate() {
+        assert!(value.pointer(&node.pointer).is_some());
+        assert!(node.x.is_finite() && node.y.is_finite());
+        if let Some(parent) = node.parent {
+            assert!(parent < index);
+        }
+        for row in &node.rows {
+            assert!(value.pointer(&row.pointer).is_some());
+        }
+    }
 }
 
 #[test]

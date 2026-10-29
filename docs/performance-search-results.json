@@ -1,0 +1,63 @@
+{
+  "date": "2026-10-29",
+  "machine": "Apple M4 Pro / macOS arm64",
+  "browser": "Chrome 156.0.8078.73",
+  "viewport": [
+    1280,
+    800
+  ],
+  "debug_logging": true,
+  "method": "type Lens then a space, followed by 12 wheel events; requestAnimationFrame gaps; same browser session",
+  "runs": [
+    {
+      "label": "pages-before",
+      "url": "https://sihaixianyu.github.io/json-lens/",
+      "bytes": 1000052,
+      "shortcut_default_prevented": false,
+      "frames": {
+        "median_ms": 16.699999999999818,
+        "p95_ms": 33.30000000000109,
+        "max_ms": 166.59999999999945,
+        "over_50_ms": 2,
+        "frames": 179
+      },
+      "build": {}
+    },
+    {
+      "label": "local-after",
+      "url": "http://127.0.0.1:8081/json-lens/",
+      "bytes": 1000052,
+      "shortcut_default_prevented": true,
+      "frames": {
+        "median_ms": 16.699999999999818,
+        "p95_ms": 33.30000000000018,
+        "max_ms": 33.400000000000546,
+        "over_50_ms": 0,
+        "frames": 177
+      },
+      "build": {
+        "revision": "local",
+        "mode": "release",
+        "simd": "true"
+      }
+    },
+    {
+      "label": "final-after",
+      "url": "http://127.0.0.1:8081/json-lens/",
+      "bytes": 1000052,
+      "shortcut_default_prevented": true,
+      "frames": {
+        "median_ms": 16.699999999999818,
+        "p95_ms": 16.800000000000182,
+        "max_ms": 16.800000000000182,
+        "over_50_ms": 0,
+        "frames": 131
+      },
+      "build": {
+        "revision": "local",
+        "mode": "release",
+        "simd": "true"
+      }
+    }
+  ]
+}

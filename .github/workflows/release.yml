@@ -62,11 +62,6 @@ jobs:
             arch: aarch64
             target: aarch64-apple-darwin
             binary: json-lens
-          - os: macos-latest
-            platform: macos
-            arch: x86_64
-            target: x86_64-apple-darwin
-            binary: json-lens
     env:
       CARGO_TERM_COLOR: always
       APP_VERSION: ${{ needs.prepare.outputs.version }}

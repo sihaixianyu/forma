@@ -24,6 +24,7 @@ pub fn find_text(text: &str, query: &str) -> TextMatches {
             result.ranges.push(offset..offset + matched.len());
         }
     }
+    log::debug!(target: "json_lens", "event=search_result matches={} stored={}", result.total, result.ranges.len());
     result
 }
 

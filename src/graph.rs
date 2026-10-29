@@ -114,6 +114,50 @@ fn kind(value: &Value) -> &'static str {
 
 /// Objects and arrays become connected cards, with indexed element rows for arrays.
 pub fn build_graph(value: &Value) -> Graph {
+    build_graph_root(value, String::new(), "root".into())
+}
+
+fn hover_string(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .filter(|text| text.len() <= crate::decode::MAX_PREVIEW_BYTES)
+        .map(str::to_owned)
+}
+
+/// Build a bounded local graph around a pointer omitted from the initial preview.
+pub fn build_graph_at(value: &Value, pointer: &str) -> Option<Graph> {
+    let selected = value.pointer(pointer)?;
+    let mut path = pointer;
+    loop {
+        let current = value.pointer(path)?;
+        if current.is_object() || current.is_array() || path.is_empty() {
+            let title = path.rsplit_once('/').map_or_else(
+                || "root".into(),
+                |(_, key)| key.replace("~1", "/").replace("~0", "~"),
+            );
+            let mut graph = build_graph_root(current, path.into(), title);
+            if !selected.is_object() && !selected.is_array() && !graph.covers_pointer(pointer) {
+                let node = &mut graph.nodes[0];
+                let key = pointer.rsplit_once('/').map_or("value", |(_, key)| key);
+                let row = Row {
+                    pointer: pointer.into(),
+                    key: preview(&key.replace("~1", "/").replace("~0", "~"), 60).into(),
+                    value: preview(&summary(selected), 100).into(),
+                    kind: kind(selected),
+                    string: hover_string(selected),
+                };
+                if node.rows.len() == 8 {
+                    node.rows.pop();
+                }
+                node.rows.push(row);
+            }
+            return Some(graph);
+        }
+        path = path.rsplit_once('/')?.0;
+    }
+}
+
+fn build_graph_root(value: &Value, root_pointer: String, title: String) -> Graph {
     let _stage = crate::diagnostics::Stage::new("graph_build", 0);
     fn row_value(value: &Value) -> String {
         if let Value::Array(array) = value {
@@ -159,7 +203,7 @@ pub fn build_graph(value: &Value) -> Graph {
                     key: preview(key, 60).into(),
                     value: row_value(value),
                     kind: kind(value),
-                    string: value.as_str().map(str::to_owned),
+                    string: hover_string(value),
                 })
                 .collect(),
             Value::Array(array) => array
@@ -171,7 +215,7 @@ pub fn build_graph(value: &Value) -> Graph {
                     key: index.to_string(),
                     value: row_value(value),
                     kind: kind(value),
-                    string: value.as_str().map(str::to_owned),
+                    string: hover_string(value),
                 })
                 .collect(),
             _ => vec![Row {
@@ -179,7 +223,7 @@ pub fn build_graph(value: &Value) -> Graph {
                 key: "value".into(),
                 value: preview(&summary(value), 100).into(),
                 kind: kind(value),
-                string: value.as_str().map(str::to_owned),
+                string: hover_string(value),
             }],
         };
         let height = 52.0 + 24.0 * count.min(8) as f32 + if count > 8 { 24.0 } else { 0.0 };
@@ -240,15 +284,7 @@ pub fn build_graph(value: &Value) -> Graph {
         Some(index)
     }
     let mut graph = Graph::default();
-    visit(
-        value,
-        String::new(),
-        "root".into(),
-        0,
-        None,
-        &mut graph,
-        &mut 0.0,
-    );
+    visit(value, root_pointer, title, 0, None, &mut graph, &mut 0.0);
     graph.children.resize_with(graph.nodes.len(), Vec::new);
     for (index, node) in graph.nodes.iter().enumerate() {
         graph.pointers.insert(node.pointer.clone(), index);
@@ -270,6 +306,13 @@ pub fn build_graph(value: &Value) -> Graph {
 }
 
 impl Graph {
+    pub fn covers_pointer(&self, pointer: &str) -> bool {
+        self.container_for(pointer).is_some_and(|index| {
+            let node = &self.nodes[index];
+            node.pointer == pointer || node.rows.iter().any(|row| row.pointer == pointer)
+        })
+    }
+
     /// Scalar search hits belong to the nearest container card.
     pub fn container_for(&self, pointer: &str) -> Option<usize> {
         let mut pointer = pointer;

@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-29",
+  "machine": "Apple M4 Pro / macOS arm64",
+  "browser": "Chrome 156.0.8078.73",
+  "viewport": [
+    1280,
+    800
+  ],
+  "debug_logging": true,
+  "method": "paste 1,066,002-character JSON; append a space and verify graph rebuild; wheel, Ctrl-wheel, drag, focus /12999/name, return to Root; click the source tail and verify local graph selection",
+  "result": {
+    "label": "after",
+    "bytes": 1066002,
+    "graph_edit_updated": true,
+    "wheel_views": 8,
+    "zoom_views": 3,
+    "drag_views": 23,
+    "tail_focused": true,
+    "root_restored": true,
+    "source_focused": true,
+    "empty_views": 0,
+    "wheel_frames": {
+      "frames": 32,
+      "p95_ms": 16.800000000000182,
+      "max_ms": 16.800000000000182
+    },
+    "zoom_frames": {
+      "frames": 25,
+      "p95_ms": 16.700000000000728,
+      "max_ms": 16.800000000000182
+    }
+  }
+}

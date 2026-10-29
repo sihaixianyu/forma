@@ -19,8 +19,10 @@ click **Light / Dark** to override it.
 
 - **Automatic comparison:** paste JSON on the right; differences highlight automatically, with aligned rows, fixed gutters and linked scrolling.
 - **Graph ↔ source navigation:** click a value to locate it on either side. Arrays retain indexed element nodes; drag cards, fold branches or reset the bounded canvas.
+  Selecting a branch beyond the initial graph preview loads its local graph; Root returns to the full overview.
 - **Fast editing workflow:** Format, Minify, recursive Sort and Expand JSON encoded in strings. **Ctrl/Cmd + S** formats the active editor; **Ctrl/Cmd + Z** undoes, **Ctrl/Cmd + Shift + Z** or **Ctrl/Cmd + Y** redoes. Tab indents with two spaces. **Ctrl/Cmd + F** toggles search; **Ctrl/Cmd + wheel** zooms the graph.
 - **Readable strings:** both editors wrap long lines automatically. Hover encoded strings for Base64, URL, Hex or nested JSON previews without changing the document.
+- **Syntax diagnostics:** invalid JSON marks the error line in the editor gutter. Hover for details or click to move the cursor; the right pane shows a compact red error status. **Ctrl/Cmd + Shift + E** jumps to the error position. Comparison identifies the invalid input side.
 - **Precise JSON:** preserves object key order and arbitrary-precision numbers. Open JSON/CSV and save JSON; browser files stay local.
 - **Desktop + WebAssembly:** native GPU rendering through wgpu, with WebGPU/WebGL2 in the browser.
 
@@ -51,6 +53,9 @@ Native processing uses background threads. In the browser, JSON processing,
 Graph construction, Compare and search run in a Web Worker. The UI stays on
 the main thread; no cross-origin isolation headers are required.
 
+Browser Find stays inside the app. Search runs in the Worker, reuses cached
+source text, and highlights only visible matches without rebuilding the editor.
+
 For a **1-million-character JSON** in Chrome, editor optimizations reduced
 median scroll frame gaps from **83 ms to 16.7 ms**, and the largest frame gap
 while opening from **417 ms to 117 ms**. [UI measurements](docs/performance.md#browser-editor-responsiveness).
@@ -77,10 +82,20 @@ DEBUG timing logs: native `JSON_LENS_LOG=debug cargo run --release --locked`;
 web append `?debug=1` and enable **Verbose** in DevTools Console.
 [Log fields and performance analysis](docs/debug.md).
 
+## Source layout
+
+`src/main.rs` defines shared application state and platform entry points.
+`src/app/` handles initialization, job scheduling and results; `src/jobs.rs`
+executes document operations. `src/ui/` separates workspace controls, search,
+source and comparison panes, editor input, layout and rendering caches.
+`src/canvas/` contains graph edge clipping and canvas regression tests.
+
+Run `cargo test --locked --all-features` for processing and UI regressions.
+
 ## Releases and deployment
 
 Version tags such as `v0.1.0` trigger [desktop packaging](.github/workflows/release.yml):
-macOS Apple Silicon/Intel `.dmg`, Windows x86_64 setup/portable `.exe`, and
+macOS Apple Silicon `.dmg`, Windows x86_64 setup/portable `.exe`, and
 Linux x86_64 `.deb`/`.tar.gz` (built on Ubuntu 22.04). Publisher signing and
 macOS notarization are not configured.
 
