@@ -717,19 +717,33 @@ impl App {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    egui::Frame::new()
-                        .fill(p.tint)
-                        .corner_radius(7)
-                        .inner_margin(3)
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new("{ }")
-                                    .monospace()
-                                    .size(16.0)
-                                    .strong()
-                                    .color(p.accent),
-                            );
-                        });
+                    let (logo, _) = ui.allocate_exact_size(
+                        egui::vec2(32.0, 32.0),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect_filled(logo, 10, p.tint);
+                    let point = |x: f32, y: f32| {
+                        logo.min + egui::vec2(x, y) * (logo.width() / 128.0)
+                    };
+                    let curves = [
+                        [(46.0, 28.0), (33.0, 28.0), (34.0, 38.0), (34.0, 48.0)],
+                        [(34.0, 48.0), (34.0, 59.0), (27.0, 61.0), (22.0, 64.0)],
+                        [(22.0, 64.0), (27.0, 67.0), (34.0, 69.0), (34.0, 80.0)],
+                        [(34.0, 80.0), (34.0, 90.0), (33.0, 100.0), (46.0, 100.0)],
+                    ];
+                    for mirrored in [false, true] {
+                        for curve in curves {
+                            ui.painter().add(egui::epaint::CubicBezierShape::from_points_stroke(
+                                curve.map(|(x, y)| point(if mirrored { 128.0 - x } else { x }, y)),
+                                false,
+                                egui::Color32::TRANSPARENT,
+                                egui::Stroke::new(1.75, p.accent),
+                            ));
+                        }
+                    }
+                    for x in [54.0, 64.0, 74.0] {
+                        ui.painter().circle_filled(point(x, 64.0), 0.9, p.accent);
+                    }
                     ui.label(RichText::new("JSON Lens")
                         .font(FontId::new(24.0, egui::FontFamily::Name("Brand".into()))))
                         .on_hover_text(format!("{}\n{}\n{}", self.filename, self.status, self.gpu_info));
@@ -1159,6 +1173,7 @@ impl App {
                     ui,
                     EditorViewport {
                         salt: "source_scroll",
+                        wrap: true,
                         height: editor_height,
                         offset,
                         palette: p,
@@ -1167,15 +1182,31 @@ impl App {
                         alignment: alignment.as_deref(),
                     },
                     |ui| {
+                        let wrap_width = if self.view == View::Compare {
+                            (ui.ctx().content_rect().width()
+                                * self.split_ratio.min(1.0 - self.split_ratio)
+                                - 128.0)
+                                .max(80.0)
+                        } else {
+                            ui.available_width().max(80.0)
+                        };
                         let mut layouter =
                             |ui: &egui::Ui, text: &dyn egui::TextBuffer, _width: f32| {
-                                let galley = self.code.layout(
+                                let galley = self.code.layout_width(
                                     ui,
                                     text.as_str(),
                                     self.dark,
                                     &self.search.text.query,
+                                    wrap_width,
                                 );
-                                aligned_galley(ui, galley, alignment.as_deref(), true)
+                                aligned_wrapped_galley(
+                                    ui,
+                                    galley,
+                                    alignment.as_deref(),
+                                    true,
+                                    &self.compare_text,
+                                    wrap_width,
+                                )
                             };
                         let mut output = egui::TextEdit::multiline(&mut self.editor)
                             .id_salt("json_source")
@@ -1189,6 +1220,7 @@ impl App {
                             .min_size(Vec2::new(0.0, editor_height))
                             .layouter(&mut layouter)
                             .show(ui);
+                        decoded_hover(ui, &output, &self.editor);
                         #[cfg(not(target_arch = "wasm32"))]
                         if self.smoke_test && std::env::var_os("JSON_LENS_CURSOR").is_some() {
                             output.response.request_focus();
@@ -1527,6 +1559,7 @@ impl App {
                     ui,
                     EditorViewport {
                         salt: "compare_scroll",
+                        wrap: true,
                         height,
                         offset: Some(offset),
                         palette: p,
@@ -1535,15 +1568,31 @@ impl App {
                         alignment: alignment.as_deref(),
                     },
                     |ui| {
+                        let wrap_width = if self.view == View::Compare {
+                            (ui.ctx().content_rect().width()
+                                * self.split_ratio.min(1.0 - self.split_ratio)
+                                - 128.0)
+                                .max(80.0)
+                        } else {
+                            ui.available_width().max(80.0)
+                        };
                         let mut layouter =
                             |ui: &egui::Ui, text: &dyn egui::TextBuffer, _width: f32| {
-                                let galley = self.compare_code.layout(
+                                let galley = self.compare_code.layout_width(
                                     ui,
                                     text.as_str(),
                                     self.dark,
                                     &self.search.right.query,
+                                    wrap_width,
                                 );
-                                aligned_galley(ui, galley, alignment.as_deref(), false)
+                                aligned_wrapped_galley(
+                                    ui,
+                                    galley,
+                                    alignment.as_deref(),
+                                    false,
+                                    &self.editor,
+                                    wrap_width,
+                                )
                             };
                         let output = egui::TextEdit::multiline(&mut self.compare_text)
                             .id_salt("compare_editor")
@@ -1558,6 +1607,7 @@ impl App {
                             .hint_text("Paste JSON here…")
                             .layouter(&mut layouter)
                             .show(ui);
+                        decoded_hover(ui, &output, &self.compare_text);
                         if output.response.changed() {
                             self.search.right.changed();
                             self.revision += 1;
@@ -1642,8 +1692,102 @@ impl App {
     }
 }
 
-fn aligned_galley(
+fn decoded_hover(ui: &egui::Ui, output: &egui::text_edit::TextEditOutput, text: &str) {
+    let value = if output.response.hovered() {
+        ui.input(|input| input.pointer.hover_pos())
+            .and_then(|mouse| {
+                let cursor = output.galley.cursor_from_pos(mouse - output.galley_pos);
+                let rect = output
+                    .galley
+                    .pos_from_cursor(cursor)
+                    .translate(output.galley_pos.to_vec2());
+                if (rect.min.x - mouse.x).abs() > 12.0 || (rect.center().y - mouse.y).abs() > 15.0 {
+                    return None;
+                }
+                let offset = text
+                    .char_indices()
+                    .nth(cursor.index)
+                    .map_or(text.len(), |(offset, _)| offset);
+                json_lens::decode::string_at(text, offset)
+            })
+    } else {
+        None
+    };
+    crate::decode_ui::show(&output.response, value.as_deref());
+}
+
+fn aligned_wrapped_galley(
     ui: &egui::Ui,
+    galley: Arc<egui::Galley>,
+    alignment: Option<&json_lens::alignment::Alignment>,
+    left: bool,
+    other: &str,
+    width: f32,
+) -> Arc<egui::Galley> {
+    if !width.is_finite() {
+        return aligned_galley(ui, galley, alignment, left);
+    }
+    let Some(alignment) = alignment else {
+        return galley;
+    };
+    let (side, other_side) = if left {
+        (&alignment.left, &alignment.right)
+    } else {
+        (&alignment.right, &alignment.left)
+    };
+    if side.source != galley.job.text || other_side.source != other {
+        return galley;
+    }
+    let mut job =
+        egui::text::LayoutJob::simple(other.into(), FontId::monospace(13.0), Color32::WHITE, width);
+    job.wrap.break_anywhere = galley.job.wrap.break_anywhere;
+    let opposite = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    let mut heights = vec![0.0_f32; alignment.height];
+    for (layout, side) in [(&*galley, side), (&*opposite, other_side)] {
+        let mut line = 0;
+        let mut height = 0.0;
+        for row in &layout.rows {
+            height += row.size.y;
+            if row.ends_with_newline {
+                if let Some(display) = side.rows.get(line) {
+                    heights[*display] = heights[*display].max(height);
+                }
+                line += 1;
+                height = 0.0;
+            }
+        }
+        if let Some(display) = side.rows.get(line) {
+            heights[*display] = heights[*display].max(height);
+        }
+    }
+    let mut tops = vec![0.0; heights.len()];
+    let mut total = 0.0;
+    for (top, height) in tops.iter_mut().zip(heights) {
+        *top = total;
+        total += height;
+    }
+    let mut result = (*galley).clone();
+    result.mesh_bounds = egui::Rect::NOTHING;
+    let mut line = 0;
+    let mut within = 0.0;
+    for row in &mut result.rows {
+        let Some(display) = side.rows.get(line) else {
+            return galley;
+        };
+        row.pos.y = tops[*display] + within;
+        result.mesh_bounds |= row.visuals.mesh_bounds.translate(row.pos.to_vec2());
+        within += row.size.y;
+        if row.ends_with_newline {
+            line += 1;
+            within = 0.0;
+        }
+    }
+    result.rect.max.y = total;
+    Arc::new(result)
+}
+
+fn aligned_galley(
+    _ui: &egui::Ui,
     galley: Arc<egui::Galley>,
     alignment: Option<&json_lens::alignment::Alignment>,
     left: bool,
@@ -1659,7 +1803,18 @@ fn aligned_galley(
     if side.source != galley.job.text || side.rows.len() != galley.rows.len() {
         return galley;
     }
-    let line_height = ui.fonts_mut(|fonts| fonts.row_height(&FontId::monospace(13.0)));
+    if alignment.height == galley.rows.len()
+        && side
+            .rows
+            .iter()
+            .enumerate()
+            .all(|(index, row)| index == *row)
+    {
+        return galley;
+    }
+    // Galley rows already have pixel-rounded heights. Reusing raw font metrics here
+    // changes the spacing cumulatively, especially at fractional display scales.
+    let line_height = galley.rows.first().map_or(0.0, |row| row.size.y);
     let mut aligned = (*galley).clone();
     aligned.mesh_bounds = egui::Rect::NOTHING;
     for (row, display) in aligned.rows.iter_mut().zip(&side.rows) {
@@ -1673,6 +1828,7 @@ fn aligned_galley(
 
 struct EditorViewport<'a> {
     salt: &'static str,
+    wrap: bool,
     height: f32,
     offset: Option<f32>,
     palette: Palette,
@@ -1691,10 +1847,14 @@ fn editor_scroll(
         let gutter = ui
             .allocate_exact_size(Vec2::new(64.0, view.height), egui::Sense::hover())
             .0;
-        let mut area = egui::ScrollArea::both()
-            .id_salt(view.salt)
-            .auto_shrink([false, false])
-            .max_height(view.height);
+        let mut area = (if view.wrap {
+            egui::ScrollArea::vertical()
+        } else {
+            egui::ScrollArea::both()
+        })
+        .id_salt(view.salt)
+        .auto_shrink([false, false])
+        .max_height(view.height);
         if let Some(offset) = view.offset {
             area = area
                 .vertical_scroll_offset(offset)
@@ -1721,7 +1881,13 @@ fn editor_scroll(
             .filter(|side| side.source == output.galley.job.text);
         let color = if view.left { p.red } else { p.green };
         let text_painter = ui.painter().with_clip_rect(scroll.inner_rect);
-        for (index, row) in output.galley.rows.iter().enumerate() {
+        let mut line = 0;
+        let mut first_visual_row = true;
+        for row in &output.galley.rows {
+            let index = line;
+            let number = first_visual_row;
+            first_visual_row = row.ends_with_newline;
+            line += usize::from(row.ends_with_newline);
             let y = output.galley_pos.y + row.pos.y;
             if y + row.size.y < gutter.top() || y > gutter.bottom() {
                 continue;
@@ -1745,13 +1911,15 @@ fn editor_scroll(
                     color.gamma_multiply(0.06),
                 );
             }
-            painter.text(
-                egui::pos2(gutter.right() - 8.0, y),
-                egui::Align2::RIGHT_TOP,
-                (index + view.first_line).to_string(),
-                FontId::monospace(13.0),
-                if changed { color } else { p.muted },
-            );
+            if number {
+                painter.text(
+                    egui::pos2(gutter.right() - 8.0, y),
+                    egui::Align2::RIGHT_TOP,
+                    (index + view.first_line).to_string(),
+                    FontId::monospace(13.0),
+                    if changed { color } else { p.muted },
+                );
+            }
         }
         scroll
     })
@@ -1861,6 +2029,22 @@ pub struct CodeCache {
 }
 
 impl CodeCache {
+    fn layout_width(
+        &mut self,
+        ui: &egui::Ui,
+        text: &str,
+        dark: bool,
+        query: &str,
+        width: f32,
+    ) -> Arc<egui::Galley> {
+        let normal = self.layout(ui, text, dark, query);
+        if !width.is_finite() {
+            return normal;
+        }
+        let mut job = (*normal.job).clone();
+        job.wrap.max_width = width;
+        ui.fonts_mut(|fonts| fonts.layout_job(job))
+    }
     fn layout(&mut self, ui: &egui::Ui, text: &str, dark: bool, query: &str) -> Arc<egui::Galley> {
         if self.text == text
             && self.query == query
@@ -1996,6 +2180,40 @@ mod feedback_tests {
     use super::*;
 
     #[test]
+    fn wrapped_comparison_keeps_following_lines_aligned_and_cursor_offsets_intact() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        configure(&ctx, false);
+        let left = format!(
+            "{{\n  \"value\": \"{}\",\n  \"last\": true\n}}",
+            "中文 long value ".repeat(12)
+        );
+        let right = "{\n  \"value\": \"short\",\n  \"last\": true\n}";
+        let alignment = json_lens::alignment::align(&left, right);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let a = CodeCache::default().layout_width(ui, &left, false, "", 180.0);
+                let b = CodeCache::default().layout_width(ui, right, false, "", 180.0);
+                assert!(a.rows.len() > left.lines().count());
+                let a = aligned_wrapped_galley(ui, a, Some(&alignment), true, right, 180.0);
+                let b = aligned_wrapped_galley(ui, b, Some(&alignment), false, &left, 180.0);
+                let a_index = left[..left.find("\"last\"").unwrap()].chars().count();
+                let b_index = right[..right.find("\"last\"").unwrap()].chars().count();
+                let a_cursor = a.pos_from_cursor(egui::text::CCursor::new(a_index));
+                let b_cursor = b.pos_from_cursor(egui::text::CCursor::new(b_index));
+                assert_eq!(a_cursor.top(), b_cursor.top());
+                assert_eq!(a.rect.height(), b.rect.height());
+                assert_eq!(
+                    a.cursor_from_pos(a_cursor.center().to_vec2()).index,
+                    a_index
+                );
+                assert_eq!(a.job.text, left);
+                assert_eq!(a.rows.iter().filter(|row| row.ends_with_newline).count(), 3);
+            });
+        });
+    }
+
+    #[test]
     fn equal_split_has_mirrored_pane_dimensions() {
         for size in [Vec2::new(1240.0, 660.0), Vec2::new(760.0, 460.0)] {
             let area = egui::Rect::from_min_size(egui::pos2(20.0, 100.0), size);
@@ -2051,6 +2269,50 @@ mod feedback_tests {
     }
 
     #[test]
+    fn comparison_preserves_normal_line_spacing_at_each_pixel_scale() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            install_fonts(&ctx);
+            configure(&ctx, false);
+            let source = "{\n  \"name\": \"中文 🚀\",\n  \"value\": 123,\n  \"ready\": true\n}";
+            let alignment = json_lens::alignment::align(source, source);
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                ctx.set_pixels_per_point(scale);
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let normal = CodeCache::default().layout(ui, source, false, "");
+                    let aligned = aligned_galley(ui, normal.clone(), Some(&alignment), true);
+                    for (before, after) in normal.rows.iter().zip(&aligned.rows) {
+                        assert_eq!(
+                            before.pos, after.pos,
+                            "line spacing changed at scale {scale}"
+                        );
+                        assert_eq!(before.size, after.size);
+                        assert!(Arc::ptr_eq(&before.row, &after.row));
+                    }
+                    assert_eq!(normal.rect, aligned.rect);
+                    let right = source.replace(
+                        "  \"ready\": true",
+                        "  \"extra\": {\n    \"nested\": true\n  },\n  \"ready\": true",
+                    );
+                    let gaps = json_lens::alignment::align(source, &right);
+                    let aligned = aligned_galley(ui, normal.clone(), Some(&gaps), true);
+                    let line_height = normal.rows[0].size.y;
+                    for (index, (before, after)) in
+                        normal.rows.iter().zip(&aligned.rows).enumerate()
+                    {
+                        assert_eq!(before.size, after.size);
+                        assert!(Arc::ptr_eq(&before.row, &after.row));
+                        assert!(
+                            (after.pos.y - gaps.left.rows[index] as f32 * line_height).abs()
+                                <= 0.5 / aligned.pixels_per_point
+                        );
+                    }
+                });
+            });
+        }
+    }
+
+    #[test]
     fn aligned_text_preserves_cursor_offsets_and_corresponding_row_heights() {
         let ctx = egui::Context::default();
         configure(&ctx, false);
@@ -2101,6 +2363,7 @@ mod feedback_tests {
                             ui,
                             EditorViewport {
                                 salt: "gutter_test",
+                                wrap: false,
                                 height: 200.0,
                                 offset: Some(0.0),
                                 palette: palette(false),

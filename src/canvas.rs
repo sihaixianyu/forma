@@ -479,6 +479,7 @@ impl Canvas {
                         ui.id().with(("graph_row", index, row_index)),
                         egui::Sense::click(),
                     );
+                    crate::decode_ui::show(&response, row.string.as_deref());
                     if response.clicked() {
                         *pointer = row.pointer.clone();
                         self.last_pointer = pointer.clone();

@@ -9,6 +9,7 @@ use web_time::Instant;
 #[cfg(target_arch = "wasm32")]
 mod browser;
 mod canvas;
+mod decode_ui;
 mod feedback;
 mod find;
 mod ui;
@@ -430,6 +431,12 @@ impl App {
                     {"id": 1, "name": "Getting started", "status": "ready", "size": 1024},
                     {"id": 2, "name": "Your next document", "status": "draft", "size": 2048}
                 ],
+                "encoded": {
+                    "base64": "SGVsbG8sIEpTT04gTGVucyE=",
+                    "base64_chinese": "5Lit5paH",
+                    "url": "Hello%2C%20JSON%20Lens%21",
+                    "hex": "48656c6c6f2c204a534f4e204c656e7321"
+                },
                 "updated": null
             }))
             .expect("valid example"),

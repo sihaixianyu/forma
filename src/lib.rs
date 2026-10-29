@@ -2,6 +2,7 @@ use serde_json::{Map, Value};
 use std::sync::Arc;
 
 pub mod alignment;
+pub mod decode;
 pub mod edit;
 pub mod graph;
 pub mod search;

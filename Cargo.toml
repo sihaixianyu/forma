@@ -10,6 +10,8 @@ eframe = { version = "0.33", default-features = false, features = ["default_font
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision", "raw_value"] }
 rfd = "0.15"
 csv = "1.4"
+base64 = "0.22"
+percent-encoding = "2.3"
 similar = { version = "2.7.0", features = ["wasm32_web_time"] }
 web-time = "1.1"
 
@@ -58,4 +60,9 @@ path = "test/alignment.rs"
 [[bench]]
 name = "workspace"
 path = "bench/workspace.rs"
+harness = false
+
+[[bench]]
+name = "comparison"
+path = "bench/comparison.rs"
 harness = false

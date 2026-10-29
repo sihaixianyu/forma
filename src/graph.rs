@@ -10,6 +10,7 @@ pub struct Row {
     pub key: String,
     pub value: String,
     pub kind: &'static str,
+    pub string: Option<String>,
 }
 pub struct GraphNode {
     pub pointer: String,
@@ -89,6 +90,7 @@ pub fn build_graph(value: &Value) -> Graph {
                     key: preview(key, 60).into(),
                     value: row_value(value),
                     kind: kind(value),
+                    string: value.as_str().map(str::to_owned),
                 })
                 .collect(),
             Value::Array(array) => array
@@ -100,6 +102,7 @@ pub fn build_graph(value: &Value) -> Graph {
                     key: index.to_string(),
                     value: row_value(value),
                     kind: kind(value),
+                    string: value.as_str().map(str::to_owned),
                 })
                 .collect(),
             _ => vec![Row {
@@ -107,6 +110,7 @@ pub fn build_graph(value: &Value) -> Graph {
                 key: "value".into(),
                 value: preview(&summary(value), 100).into(),
                 kind: kind(value),
+                string: value.as_str().map(str::to_owned),
             }],
         };
         let height = 52.0 + 24.0 * count.min(8) as f32 + if count > 8 { 24.0 } else { 0.0 };
