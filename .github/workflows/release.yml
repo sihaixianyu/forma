@@ -1,0 +1,145 @@
+name: Build Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without leading v; blank uses Cargo.toml"
+        required: false
+        default: ""
+      prerelease:
+        description: "Mark as prerelease"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Resolve release version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: python3 scripts/release_version.py
+
+  build:
+    name: Package ${{ matrix.platform }} ${{ matrix.arch }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+            binary: json-lens
+          - os: windows-latest
+            platform: windows
+            arch: x86_64
+            target: x86_64-pc-windows-msvc
+            binary: json-lens.exe
+          - os: macos-latest
+            platform: macos
+            arch: aarch64
+            target: aarch64-apple-darwin
+            binary: json-lens
+          - os: macos-latest
+            platform: macos
+            arch: x86_64
+            target: x86_64-apple-darwin
+            binary: json-lens
+    env:
+      CARGO_TERM_COLOR: always
+      APP_VERSION: ${{ needs.prepare.outputs.version }}
+      APP_PLATFORM: ${{ matrix.platform }}
+      APP_ARCH: ${{ matrix.arch }}
+      APP_TARGET: ${{ matrix.target }}
+      APP_BINARY: ${{ matrix.binary }}
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install Linux build and packaging dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libx11-dev libxrandr-dev libxi-dev libxcursor-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libudev-dev dpkg-dev desktop-file-utils
+      - name: Install Windows installer tool
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install nsis --version=3.11 --yes --no-progress
+      - name: Build native release
+        shell: bash
+        run: cargo build --release --locked --target "$APP_TARGET" --bin json-lens
+      - name: Package application
+        shell: bash
+        run: python scripts/package_release.py "$APP_PLATFORM" --version "$APP_VERSION" --arch "$APP_ARCH" --binary "target/$APP_TARGET/release/$APP_BINARY"
+      - name: Verify Linux package
+        if: runner.os == 'Linux'
+        run: |
+          desktop-file-validate packaging/json-lens.desktop
+          dpkg-deb --info release-dist/*.deb
+          dpkg-deb --contents release-dist/*.deb
+          tar -tzf release-dist/*.tar.gz
+      - name: Verify macOS disk image
+        if: runner.os == 'macOS'
+        run: hdiutil verify release-dist/*.dmg
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: json-lens-${{ matrix.platform }}-${{ matrix.arch }}-${{ needs.prepare.outputs.version }}
+          path: release-dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: json-lens-*
+          merge-multiple: true
+          path: release-dist
+      - name: Generate package checksums
+        working-directory: release-dist
+        run: sha256sum *.dmg *.exe *.deb *.tar.gz > SHA256SUMS.txt
+      - name: Publish release packages
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          files: release-dist/*
+          fail_on_unmatched_files: true
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
+          generate_release_notes: true

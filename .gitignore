@@ -1,5 +1,8 @@
 # Rust build and profiling output
 /target/
+/dist/
+/release-dist/
+__pycache__/
 *.rs.bk
 *.profraw
 *.profdata

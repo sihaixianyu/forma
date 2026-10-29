@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f7f8fc" />
+    <title>JSON Lens</title>
+    <link data-trunk rel="copy-file" href="packaging/json-lens.svg" />
+    <link rel="icon" type="image/svg+xml" href="json-lens.svg" />
+    <link data-trunk rel="rust" data-bin="json-lens"
+      data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int" />
+    <style>
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      body { background: #f7f8fc; color: #343a4d; }
+      canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+      #loading { position: fixed; inset: 0; display: grid; place-items: center;
+        font: 16px system-ui, sans-serif; text-align: center; padding: 24px; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #151822; color: #e1e5f0; }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="json-lens" aria-label="JSON Lens editor"></canvas>
+    <div id="loading" role="status">Loading JSON Lens…</div>
+  </body>
+</html>

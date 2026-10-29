@@ -3,8 +3,9 @@ use json_lens::search::{TextMatches, TreeMatches, find_text, find_tree};
 use serde_json::Value;
 use std::{
     sync::{Arc, mpsc},
-    time::{Duration, Instant},
+    time::Duration,
 };
+use web_time::Instant;
 
 enum Request {
     Text(u64, Arc<String>, String),
@@ -86,9 +87,9 @@ pub struct Search {
     pub right: FindState<TextMatches>,
     pub right_jump: bool,
     pub jump: bool,
-    sender: mpsc::Sender<Request>,
-    tree_sender: mpsc::Sender<Request>,
-    right_sender: mpsc::Sender<Request>,
+    sender: crate::worker::Sender<Request>,
+    tree_sender: crate::worker::Sender<Request>,
+    right_sender: crate::worker::Sender<Request>,
     receiver: mpsc::Receiver<Result>,
 }
 
@@ -97,15 +98,12 @@ impl Search {
         let (results, receiver) = mpsc::channel();
         let mut senders = Vec::new();
         for _ in 0..3 {
-            let (sender, requests) = mpsc::channel();
-            let results = results.clone();
-            let ctx = ctx.clone();
-            std::thread::spawn(move || {
-                while let Ok(mut request) = requests.recv() {
-                    while let Ok(newer) = requests.try_recv() {
-                        request = newer;
-                    }
-                    let result = match request {
+            let sender =
+                crate::worker::spawn(
+                    ctx.clone(),
+                    results.clone(),
+                    true,
+                    |request| match request {
                         Request::Text(id, text, query) => {
                             Result::Text(id, find_text(&text, &query))
                         }
@@ -115,13 +113,8 @@ impl Search {
                         Request::Tree(id, value, query) => {
                             Result::Tree(id, find_tree(&value, &query))
                         }
-                    };
-                    if results.send(result).is_err() {
-                        break;
-                    }
-                    ctx.request_repaint();
-                }
-            });
+                    },
+                );
             senders.push(sender);
         }
         let right_sender = senders.pop().unwrap();

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=JSON Lens
+Comment=Edit, explore and compare JSON
+Exec=json-lens %f
+Icon=json-lens
+Terminal=false
+Categories=Development;Utility;
+MimeType=application/json;
+StartupNotify=true

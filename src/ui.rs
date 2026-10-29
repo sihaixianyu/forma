@@ -19,13 +19,38 @@ pub fn install_fonts(ctx: &egui::Context) {
             "../assets/fonts/MapleMono-NF-CN-Regular.ttf"
         ))),
     );
-    for family in [egui::FontFamily::Monospace, egui::FontFamily::Proportional] {
-        fonts
-            .families
-            .entry(family)
-            .or_default()
-            .insert(0, "Maple Mono CN".into());
-    }
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .insert(0, "Maple Mono CN".into());
+    fonts.font_data.insert(
+        "Inter".into(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/Inter.ttf"
+        ))),
+    );
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "Inter".into());
+    // Inter has no CJK glyphs; keep Maple as a fallback for Chinese text.
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .push("Maple Mono CN".into());
+    fonts.font_data.insert(
+        "Bungee".into(),
+        Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/Bungee-Regular.ttf"
+        ))),
+    );
+    fonts.families.insert(
+        egui::FontFamily::Name("Brand".into()),
+        vec!["Bungee".into(), "Inter".into()],
+    );
     ctx.set_fonts(fonts);
 }
 
@@ -688,35 +713,29 @@ impl App {
             .frame(
                 egui::Frame::new()
                     .fill(p.surface)
-                    .inner_margin(egui::Margin::symmetric(20, 10)),
+                    .inner_margin(egui::Margin::symmetric(12, 8)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     egui::Frame::new()
                         .fill(p.tint)
-                        .corner_radius(12)
-                        .inner_margin(11)
+                        .corner_radius(7)
+                        .inner_margin(3)
                         .show(ui, |ui| {
                             ui.label(
                                 RichText::new("{ }")
                                     .monospace()
-                                    .size(21.0)
+                                    .size(16.0)
                                     .strong()
                                     .color(p.accent),
                             );
                         });
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("JSON Lens").size(23.0).strong());
-
-                    });
+                    ui.label(RichText::new("JSON Lens")
+                        .font(FontId::new(24.0, egui::FontFamily::Name("Brand".into()))))
+                        .on_hover_text(format!("{}\n{}\n{}", self.filename, self.status, self.gpu_info));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let label = match (self.theme_preference, self.dark) {
-                            (egui::ThemePreference::System, true) => "System · Dark",
-                            (egui::ThemePreference::System, false) => "System · Light",
-                            (_, true) => "Dark",
-                            (_, false) => "Light",
-                        };
-                        let theme = button(ui, label, p)
+                        let label = if self.dark { "Dark" } else { "Light" };
+                        let theme = primary(ui, label, p)
                             .on_hover_text("Click to switch Light / Dark. Right-click to select System, Light or Dark.");
                         if theme.clicked() {
                             self.set_theme_preference(ui.ctx(), if self.dark {
@@ -738,28 +757,13 @@ impl App {
                             }
                         });
                         ui.add_enabled_ui(!self.busy || self.automatic_job, |ui| {
-                            if ui
-                                .add_enabled_ui(!self.dirty && self.document.is_some(), |ui| {
-                                    button(ui, "Export CSV", p)
-                                })
-                                .inner
-                                .clicked()
-                                && let Some(path) = rfd::FileDialog::new()
-                                    .set_file_name("document.csv")
-                                    .save_file()
-                            {
-                                self.submit(Job::Csv(
-                                    self.document.as_ref().unwrap().clone(),
-                                    path,
-                                ));
-                            }
                             if button(ui, "Save as…", p)
                                 .on_hover_text("Save JSON · ⌘S / Ctrl+S")
                                 .clicked()
                             {
                                 self.save_file();
                             }
-                            if primary(ui, "Open file", p)
+                            if button(ui, "Open file", p)
                                 .on_hover_text("Open JSON or CSV · ⌘O / Ctrl+O")
                                 .clicked()
                             {
@@ -770,46 +774,8 @@ impl App {
                 });
             });
 
-        egui::TopBottomPanel::bottom("status_bar")
-            .frame(
-                egui::Frame::new()
-                    .fill(p.surface)
-                    .inner_margin(egui::Margin::symmetric(24, 9)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let color = if self.error {
-                        p.red
-                    } else if self.dirty {
-                        p.amber
-                    } else {
-                        p.green
-                    };
-                    if self.busy {
-                        ui.spinner();
-                    } else {
-                        let (rect, _) =
-                            ui.allocate_exact_size(Vec2::splat(8.0), egui::Sense::hover());
-                        ui.painter().circle_filled(rect.center(), 3.0, color);
-                    }
-                    ui.label(
-                        RichText::new(if self.dirty {
-                            "Modified · refreshing after typing…"
-                        } else {
-                            &self.status
-                        })
-                        .size(12.0)
-                        .color(if self.error { p.red } else { p.muted }),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new("UTF-8   ·   JSON").size(11.0).color(p.muted))
-                            .on_hover_text(&self.gpu_info);
-                    });
-                });
-            });
-
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(p.canvas).inner_margin(12))
+            .frame(egui::Frame::new().fill(p.canvas).inner_margin(8))
             .show(ctx, |ui| {
                 let area = ui.available_rect_before_wrap();
                 if self.graph_wide && self.view == View::Graph {
@@ -961,6 +927,7 @@ impl App {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn open_file(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("JSON / CSV", &["json", "csv", "txt"])
@@ -975,6 +942,7 @@ impl App {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn save_file(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .set_file_name(&self.filename)
@@ -983,6 +951,18 @@ impl App {
             let text = self.source();
             self.submit(Job::Save(text, path));
         }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn open_file(&mut self) {
+        self.files.open();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn save_file(&mut self) {
+        let text = self.source();
+        self.files
+            .save(Arc::new(text.as_bytes().to_vec()), self.filename.clone());
     }
 
     fn next_difference(&mut self, backwards: bool) {
@@ -1004,7 +984,11 @@ impl App {
         ));
     }
     fn header_height(&self) -> f32 {
-        self.source_header_height.max(self.right_header_height)
+        if self.view == View::Compare {
+            self.source_header_height.max(self.right_header_height)
+        } else {
+            self.source_header_height
+        }
     }
 
     fn align_right_content(&mut self, ui: &mut egui::Ui, top: f32) {
@@ -1013,7 +997,7 @@ impl App {
             ui.ctx().request_repaint();
         }
         self.right_header_height = measured;
-        if self.graph_wide && self.view == View::Graph {
+        if self.view == View::Graph {
             return;
         }
         if ui.cursor().top() > self.pane_content_top + 0.5 {
@@ -1039,108 +1023,93 @@ impl App {
             .fill(p.surface)
             .stroke(Stroke::new(1.0_f32, p.border))
             .corner_radius(12)
-            .inner_margin(12)
+            .inner_margin(8)
             .show(ui, |ui| {
                 let header_top = ui.cursor().top();
-                ui.set_min_height((height - 26.0).max(100.0));
+                ui.set_min_height((height - 18.0).max(100.0));
                 ui.set_min_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Source").size(16.0).strong());
-                    badge(ui, "JSON", p.accent, p.tint);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(format_size(if self.dirty {
-                                self.editor.len()
-                            } else {
-                                self.full_text.len()
-                            }))
-                            .size(11.0)
-                            .color(p.muted),
-                        );
-                    });
-                });
-                ui.label(RichText::new(&self.filename).size(12.0).color(p.muted));
-                ui.add_space(5.0);
-                ui.add_enabled_ui(!self.busy || self.automatic_job, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        if primary(ui, "Format", p).clicked() {
-                            self.parse(Format::Pretty);
-                        }
-                        if button(ui, "Minify", p).clicked() {
-                            self.parse(Format::Compact);
-                        }
-                        if button(ui, "Expand", p)
-                            .on_hover_text("Expand JSON encoded in strings")
-                            .clicked()
-                        {
-                            self.parse(Format::Nested);
-                        }
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            if action_button_with_radius(
-                                ui,
-                                "Sort",
-                                p,
-                                false,
-                                Vec2::new(76.0, 34.0),
-                                egui::CornerRadius {
-                                    nw: 7,
-                                    ne: 0,
-                                    sw: 7,
-                                    se: 0,
-                                },
-                            )
-                            .on_hover_text(if self.sort_descending {
-                                "Sort keys descending"
-                            } else {
-                                "Sort keys ascending"
-                            })
-                            .clicked()
-                            {
-                                self.parse(if self.sort_descending {
-                                    Format::SortDescending
-                                } else {
-                                    Format::SortAscending
-                                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_enabled_ui(!self.busy || self.automatic_job, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            if primary(ui, "Format", p).clicked() {
+                                self.parse(Format::Pretty);
                             }
-                            let direction = if self.sort_descending { "↓" } else { "↑" };
-                            if action_button_with_radius(
-                                ui,
-                                direction,
-                                p,
-                                false,
-                                Vec2::new(30.0, 34.0),
-                                egui::CornerRadius {
-                                    nw: 0,
-                                    ne: 7,
-                                    sw: 0,
-                                    se: 7,
-                                },
-                            )
-                            .on_hover_text("Toggle ascending / descending order")
-                            .clicked()
+                            if button(ui, "Minify", p).clicked() {
+                                self.parse(Format::Compact);
+                            }
+                            if button(ui, "Expand", p)
+                                .on_hover_text("Expand JSON encoded in strings")
+                                .clicked()
                             {
-                                self.sort_descending = !self.sort_descending;
-                                self.notify(
-                                    crate::feedback::Kind::Info,
-                                    if self.sort_descending {
-                                        "Sort order: descending"
-                                    } else {
-                                        "Sort order: ascending"
+                                self.parse(Format::Nested);
+                            }
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                if action_button_with_radius(
+                                    ui,
+                                    "Sort",
+                                    p,
+                                    false,
+                                    Vec2::new(76.0, 34.0),
+                                    egui::CornerRadius {
+                                        nw: 7,
+                                        ne: 0,
+                                        sw: 7,
+                                        se: 0,
                                     },
-                                );
-                            }
+                                )
+                                .on_hover_text(if self.sort_descending {
+                                    "Sort keys descending"
+                                } else {
+                                    "Sort keys ascending"
+                                })
+                                .clicked()
+                                {
+                                    self.parse(if self.sort_descending {
+                                        Format::SortDescending
+                                    } else {
+                                        Format::SortAscending
+                                    });
+                                }
+                                let direction = if self.sort_descending { "↓" } else { "↑" };
+                                if action_button_with_radius(
+                                    ui,
+                                    direction,
+                                    p,
+                                    false,
+                                    Vec2::new(30.0, 34.0),
+                                    egui::CornerRadius {
+                                        nw: 0,
+                                        ne: 7,
+                                        sw: 0,
+                                        se: 7,
+                                    },
+                                )
+                                .on_hover_text("Toggle ascending / descending order")
+                                .clicked()
+                                {
+                                    self.sort_descending = !self.sort_descending;
+                                    self.notify(
+                                        crate::feedback::Kind::Info,
+                                        if self.sort_descending {
+                                            "Sort order: descending"
+                                        } else {
+                                            "Sort order: ascending"
+                                        },
+                                    );
+                                }
+                            });
                         });
                     });
                 });
-                ui.add_space(8.0);
+                ui.add_space(2.0);
                 ui.separator();
-                ui.add_space(8.0);
+                ui.add_space(2.0);
                 self.text_search(ui, p);
                 if self.search.jump {
                     self.prepare_search_jump();
                 }
-                ui.add_space(5.0);
+                ui.add_space(2.0);
                 if !self.editable {
                     egui::Frame::new()
                         .fill(p.tint)
@@ -1220,6 +1189,7 @@ impl App {
                             .min_size(Vec2::new(0.0, editor_height))
                             .layouter(&mut layouter)
                             .show(ui);
+                        #[cfg(not(target_arch = "wasm32"))]
                         if self.smoke_test && std::env::var_os("JSON_LENS_CURSOR").is_some() {
                             output.response.request_focus();
                             let cursor = egui::text::CCursor::new(12);
@@ -1233,7 +1203,7 @@ impl App {
                             self.revision += 1;
                             self.clear_comparison();
                             self.auto_due = Some(
-                                std::time::Instant::now() + std::time::Duration::from_millis(500),
+                                web_time::Instant::now() + std::time::Duration::from_millis(500),
                             );
                             ui.ctx()
                                 .request_repaint_after(std::time::Duration::from_millis(500));
@@ -1362,14 +1332,13 @@ impl App {
             .fill(p.surface)
             .stroke(Stroke::new(1.0_f32, p.border))
             .corner_radius(12)
-            .inner_margin(12)
+            .inner_margin(8)
             .show(ui, |ui| {
                 let header_top = ui.cursor().top();
-                ui.set_min_height((height - 26.0).max(100.0));
+                ui.set_min_height((height - 18.0).max(100.0));
                 ui.set_min_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Graph").size(16.0).strong())
-                        .on_hover_text(&self.filename);
+                    self.mode_tabs(ui, p);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let reset = button(ui, "Reset", p).on_hover_text(
                             "Reset graph layout. Right-click for canvas size options.",
@@ -1426,13 +1395,10 @@ impl App {
                         self.pointer.clear();
                     }
                 });
-                ui.add_space(5.0);
-                ui.horizontal_wrapped(|ui| {
-                    self.mode_tabs(ui, p);
-                });
-                ui.add_space(8.0);
+                ui.add_space(2.0);
+                ui.add_space(2.0);
                 ui.separator();
-                ui.add_space(8.0);
+                ui.add_space(2.0);
                 if self.dirty {
                     ui.label(
                         RichText::new("Updating preview after typing…")
@@ -1493,14 +1459,53 @@ impl App {
             .fill(p.surface)
             .stroke(Stroke::new(1.0_f32, p.border))
             .corner_radius(12)
-            .inner_margin(12)
+            .inner_margin(8)
             .show(ui, |ui| {
                 let top = ui.cursor().top();
-                ui.set_min_height((height - 26.0).max(100.0));
+                ui.set_min_height((height - 18.0).max(100.0));
                 ui.set_min_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Compare").size(16.0).strong());
-                    badge(ui, "JSON", p.accent, p.tint);
+                    self.mode_tabs(ui, p);
+                    if !self.compare_text.trim().is_empty() || self.comparison_done {
+                        let count = self.differences.len();
+                        let message = if !self.comparison_done {
+                            if self.error {
+                                self.status.clone()
+                            } else {
+                                "Updating comparison…".into()
+                            }
+                        } else if count == 0 {
+                            "Both documents are equal".into()
+                        } else {
+                            format!(
+                                "Difference {} / {}{}",
+                                self.compare_selected + 1,
+                                count,
+                                if count == 1000 { " (limit)" } else { "" }
+                            )
+                        };
+                        let summary = ui.label(RichText::new(message).size(12.0).color(p.muted));
+                        if let Some(diff) = self.differences.get(self.compare_selected) {
+                            summary.on_hover_text(format!(
+                                "{}\n− {}\n+ {}",
+                                diff.pointer, diff.left, diff.right
+                            ));
+                        }
+                        if ui
+                            .add_enabled(count > 0 && !self.busy, egui::Button::new("<"))
+                            .on_hover_text("Previous difference")
+                            .clicked()
+                        {
+                            self.next_difference(true);
+                        }
+                        if ui
+                            .add_enabled(count > 0 && !self.busy, egui::Button::new(">"))
+                            .on_hover_text("Next difference")
+                            .clicked()
+                        {
+                            self.next_difference(false);
+                        }
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             RichText::new(format_size(self.compare_text.len()))
@@ -1509,60 +1514,10 @@ impl App {
                         );
                     });
                 });
-                ui.label(
-                    RichText::new("Paste a second JSON document")
-                        .size(12.0)
-                        .color(p.muted),
-                );
-                ui.add_space(5.0);
-                ui.horizontal_wrapped(|ui| {
-                    self.mode_tabs(ui, p);
-                });
-                ui.add_space(8.0);
+                ui.add_space(2.0);
+                ui.add_space(2.0);
                 ui.separator();
-                ui.add_space(8.0);
-                ui.horizontal_wrapped(|ui| {
-                    let count = self.differences.len();
-                    let message = if !self.comparison_done {
-                        if self.compare_text.trim().is_empty() {
-                            "Paste JSON on the right to compare automatically".into()
-                        } else if self.error {
-                            self.status.clone()
-                        } else {
-                            "Updating comparison…".into()
-                        }
-                    } else if count == 0 {
-                        "Both documents are equal".into()
-                    } else {
-                        format!(
-                            "Difference {} / {}{}",
-                            self.compare_selected + 1,
-                            count,
-                            if count == 1000 { " (limit)" } else { "" }
-                        )
-                    };
-                    let summary = ui.label(RichText::new(message).size(12.0).color(p.muted));
-                    if let Some(diff) = self.differences.get(self.compare_selected) {
-                        summary.on_hover_text(format!(
-                            "{}\n− {}\n+ {}",
-                            diff.pointer, diff.left, diff.right
-                        ));
-                    }
-                    if ui
-                        .add_enabled(count > 0 && !self.busy, egui::Button::new("<"))
-                        .on_hover_text("Previous difference")
-                        .clicked()
-                    {
-                        self.next_difference(true);
-                    }
-                    if ui
-                        .add_enabled(count > 0 && !self.busy, egui::Button::new(">"))
-                        .on_hover_text("Next difference")
-                        .clicked()
-                    {
-                        self.next_difference(false);
-                    }
-                });
+                ui.add_space(2.0);
                 self.right_search(ui, p);
                 self.align_right_content(ui, top);
                 let alignment = self.compare_alignment.clone();
@@ -1609,7 +1564,7 @@ impl App {
                             self.clear_comparison();
                             if self.dirty {
                                 self.auto_due = Some(
-                                    std::time::Instant::now()
+                                    web_time::Instant::now()
                                         + std::time::Duration::from_millis(500),
                                 );
                             }
@@ -1753,11 +1708,7 @@ fn editor_scroll(
         );
         let painter = ui.painter().with_clip_rect(gutter);
         let p = view.palette;
-        painter.rect_filled(gutter, 3, p.subtle);
-        painter.line_segment(
-            [gutter.right_top(), gutter.right_bottom()],
-            Stroke::new(1.0, p.border),
-        );
+        painter.rect_filled(gutter, 8, p.subtle);
         let side = view
             .alignment
             .map(|alignment| {
@@ -1777,14 +1728,14 @@ fn editor_scroll(
             }
             let changed = side.is_some_and(|side| side.changed.get(index) == Some(&true));
             if changed {
-                painter.rect_filled(
-                    egui::Rect::from_min_size(
-                        egui::pos2(gutter.left(), y),
-                        Vec2::new(3.0, row.size.y),
-                    ),
-                    0,
-                    color,
-                );
+                let marker = egui::Rect::from_min_size(
+                    egui::pos2(gutter.left() + 4.0, y),
+                    Vec2::new(3.0, row.size.y),
+                )
+                .intersect(gutter.shrink2(Vec2::new(0.0, 8.0)));
+                if marker.is_positive() {
+                    painter.rect_filled(marker, 2, color);
+                }
                 text_painter.rect_filled(
                     egui::Rect::from_min_size(
                         egui::pos2(scroll.inner_rect.left(), y),

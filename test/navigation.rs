@@ -58,6 +58,70 @@ fn graph_connects_containers_and_locates_scalar_search_hits() {
     let first = graph.container_for("/items/0/id").unwrap();
     let second = graph.container_for("/items/1/id").unwrap();
     assert!(graph.nodes[first].y + graph.nodes[first].height < graph.nodes[second].y);
+    let items = graph.container_for("/items").unwrap();
+    assert_eq!(graph.nodes[first].parent, Some(items));
+    assert_eq!(graph.nodes[second].parent, Some(items));
+}
+
+#[test]
+fn arrays_show_indexed_rows_and_keep_nested_source_pointers() {
+    let value = json!({"tags": ["中文", "rust"], "empty": [], "a/b": [[{"name":"nested"}]], "items": [1, {"name":"one"}, [null, {"name":"two"}]]});
+    let graph = build_graph(&value);
+    for node in graph.nodes.iter().filter(|node| node.kind == "array") {
+        assert_eq!(node.rows.len(), node.count.min(8));
+        for (index, row) in node.rows.iter().enumerate() {
+            assert_eq!(row.key, index.to_string());
+            assert!(value.pointer(&row.pointer).is_some());
+        }
+        assert!(node.height >= 52.0);
+        assert_eq!(
+            node.count,
+            value
+                .pointer(&node.pointer)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len()
+        );
+    }
+    let tags = graph.nodes[0]
+        .rows
+        .iter()
+        .find(|row| row.key == "tags")
+        .unwrap();
+    assert_eq!(tags.value, "[\"中文\", \"rust\"]");
+    assert_eq!(
+        graph.nodes[0]
+            .rows
+            .iter()
+            .find(|row| row.key == "empty")
+            .unwrap()
+            .value,
+        "[]"
+    );
+    for pointer in ["/a~1b/0/0", "/items/1", "/items/2/1"] {
+        let index = graph.container_for(&format!("{pointer}/name")).unwrap();
+        assert_eq!(graph.nodes[index].pointer, pointer);
+        let parent = graph.nodes[index].parent.unwrap();
+        assert_eq!(
+            graph.nodes[parent].pointer,
+            pointer.rsplit_once('/').unwrap().0
+        );
+        assert_eq!(graph.nodes[parent].kind, "array");
+        assert!(value.pointer(pointer).unwrap().is_object());
+    }
+    assert_eq!(
+        graph.container_for("/items/0"),
+        graph.container_for("/items")
+    );
+    assert_eq!(
+        graph.nodes[graph.container_for("/a~1b/0").unwrap()].pointer,
+        "/a~1b/0"
+    );
+    let root = build_graph(&json!([1, [2, {"name":"root list"}]]));
+    assert_eq!(root.nodes.len(), 3);
+    assert_eq!(root.nodes[2].pointer, "/1/1");
+    assert_eq!(root.nodes[2].parent, Some(1));
 }
 
 #[test]

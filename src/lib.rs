@@ -140,36 +140,6 @@ pub fn csv_to_json(text: &str) -> Result<Value, String> {
     Ok(Value::Array(rows))
 }
 
-pub fn json_to_csv(value: &Value) -> Result<Vec<u8>, String> {
-    let rows = value
-        .as_array()
-        .ok_or("CSV export requires an array of objects")?;
-    let mut headers = Map::new();
-    for row in rows {
-        for key in row
-            .as_object()
-            .ok_or("CSV export requires an array of objects")?
-            .keys()
-        {
-            headers.insert(key.clone(), Value::Null);
-        }
-    }
-    let mut writer = csv::Writer::from_writer(Vec::new());
-    writer
-        .write_record(headers.keys())
-        .map_err(|e| e.to_string())?;
-    for row in rows {
-        writer
-            .write_record(headers.keys().map(|key| match row.get(key) {
-                Some(Value::String(s)) => s.clone(),
-                Some(Value::Null) | None => String::new(),
-                Some(v) => v.to_string(),
-            }))
-            .map_err(|e| e.to_string())?;
-    }
-    writer.into_inner().map_err(|e| e.to_string())
-}
-
 pub struct Difference {
     pub pointer: String,
     pub left: String,

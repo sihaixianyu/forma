@@ -1,18 +1,28 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
+use web_time::Instant;
+#[cfg(target_arch = "wasm32")]
+mod browser;
 mod canvas;
 mod feedback;
 mod find;
 mod ui;
+mod worker;
 
 use eframe::egui;
 use json_lens::{
     Difference, Document, EDIT_LIMIT, Format, PREVIEW_LIMIT, compare, csv_to_json, format_document,
-    json_to_csv, preview, process,
+    preview, process,
 };
 use serde_json::Value;
 use std::{
-    path::PathBuf,
     sync::{Arc, mpsc},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 enum Job {
@@ -23,12 +33,14 @@ enum Job {
     SourcePointer(Arc<Document>, usize),
     Inspect(Arc<Document>, String),
     Edit(Arc<Document>, String, String, bool),
+    #[cfg(not(target_arch = "wasm32"))]
     Open(PathBuf),
+    Import(Arc<String>, String),
     Compare(Arc<String>, Arc<String>),
     FormatRight(Arc<String>),
     LocateDiff(Arc<String>, Arc<String>, String),
+    #[cfg(not(target_arch = "wasm32"))]
     Save(Arc<String>, PathBuf),
-    Csv(Arc<Document>, PathBuf),
 }
 
 impl Job {
@@ -50,12 +62,14 @@ impl Job {
             };
         }
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Job::Open(_) => "Open file",
+            Job::Import(..) => "Open file",
             Job::Compare(..) => "Compare JSON",
             Job::FormatRight(..) => "Format right JSON",
             Job::LocateDiff(..) => "Locate difference",
+            #[cfg(not(target_arch = "wasm32"))]
             Job::Save(..) => "Save JSON",
-            Job::Csv(..) => "Export CSV",
             Job::Locate(..) => "Locate source",
             Job::SourcePointer(..) => "Locate graph node",
             Job::Inspect(..) => "Inspect node",
@@ -79,6 +93,7 @@ enum Output {
         Option<std::ops::Range<usize>>,
         Option<std::ops::Range<usize>>,
     ),
+    #[cfg(not(target_arch = "wasm32"))]
     Saved,
     Located(std::ops::Range<usize>),
     SourcePointer(Option<String>),
@@ -174,17 +189,27 @@ fn execute(job: Job) -> Result<Output, String> {
             Ok(doc) => document_output(doc),
             Err(error) => Output::Invalid(text, error),
         }),
+        #[cfg(not(target_arch = "wasm32"))]
         Job::Open(path) => {
             let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            let text = if path
-                .extension()
+            execute(Job::Import(
+                Arc::new(text),
+                path.to_string_lossy().into_owned(),
+            ))
+        }
+        Job::Import(text, name) => {
+            let text = if name
+                .rsplit('.')
+                .next()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
             {
-                serde_json::to_string_pretty(&csv_to_json(&text)?).map_err(|e| e.to_string())?
+                Arc::new(
+                    serde_json::to_string_pretty(&csv_to_json(&text)?)
+                        .map_err(|e| e.to_string())?,
+                )
             } else {
                 text
             };
-            let text = Arc::new(text);
             Ok(match process(text.clone(), Format::Keep) {
                 Ok(doc) => document_output(doc),
                 Err(error) => Output::Invalid(text, error),
@@ -212,12 +237,9 @@ fn execute(job: Job) -> Result<Output, String> {
             let (a, b) = diff_ranges(&left, &right, &pointer);
             Ok(Output::DiffLocation(a, b))
         }
+        #[cfg(not(target_arch = "wasm32"))]
         Job::Save(text, path) => {
             std::fs::write(path, text.as_bytes()).map_err(|e| e.to_string())?;
-            Ok(Output::Saved)
-        }
-        Job::Csv(doc, path) => {
-            std::fs::write(path, json_to_csv(&doc.value)?).map_err(|e| e.to_string())?;
             Ok(Output::Saved)
         }
     }
@@ -230,8 +252,11 @@ enum View {
 }
 
 struct App {
+    #[cfg(not(target_arch = "wasm32"))]
     smoke_test: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     smoke_frames: usize,
+    #[cfg(not(target_arch = "wasm32"))]
     smoke_capture_requested: bool,
     editor: String,
     full_text: Arc<String>,
@@ -271,7 +296,9 @@ struct App {
     pointer: String,
     differences: Vec<Difference>,
     comparison_done: bool,
-    jobs: mpsc::Sender<Work>,
+    #[cfg(target_arch = "wasm32")]
+    files: browser::Files,
+    jobs: worker::Sender<Work>,
     revision: u64,
     auto_due: Option<Instant>,
     compare_due: Option<Instant>,
@@ -370,34 +397,24 @@ impl App {
     fn create(ctx: egui::Context, gpu: String) -> Self {
         ui::install_fonts(&ctx);
         ctx.options_mut(|options| options.fallback_theme = egui::Theme::Light);
-        let (jobs, receiver) = mpsc::channel::<Work>();
         let (sender, completed) = mpsc::channel();
-        let repaint_ctx = ctx.clone();
-        std::thread::spawn(move || {
-            for work in receiver {
-                let start = Instant::now();
-                let target = match &work.job {
-                    Job::Edit(_, pointer, key, true) => pointer
-                        .rsplit_once('/')
-                        .map(|(parent, _)| json_lens::pointer_child(parent, key)),
-                    _ => None,
-                };
-                let result = execute(work.job);
-                if sender
-                    .send(Completed {
-                        target,
-                        label: work.label,
-                        user_action: work.user_action,
-                        revision: work.revision,
-                        reset_view: work.reset_view,
-                        result,
-                        elapsed: start.elapsed(),
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-                repaint_ctx.request_repaint();
+        let jobs = worker::spawn(ctx.clone(), sender, false, |work: Work| {
+            let start = Instant::now();
+            let target = match &work.job {
+                Job::Edit(_, pointer, key, true) => pointer
+                    .rsplit_once('/')
+                    .map(|(parent, _)| json_lens::pointer_child(parent, key)),
+                _ => None,
+            };
+            let result = execute(work.job);
+            Completed {
+                target,
+                label: work.label,
+                user_action: work.user_action,
+                revision: work.revision,
+                reset_view: work.reset_view,
+                result,
+                elapsed: start.elapsed(),
             }
         });
         let text = Arc::new(
@@ -418,8 +435,12 @@ impl App {
             .expect("valid example"),
         );
         let mut app = Self {
-            smoke_test: std::env::args().any(|arg| arg == "--smoke-test"),
+            #[cfg(not(target_arch = "wasm32"))]
+            smoke_test: cfg!(not(target_arch = "wasm32"))
+                && std::env::args().any(|arg| arg == "--smoke-test"),
+            #[cfg(not(target_arch = "wasm32"))]
             smoke_frames: 0,
+            #[cfg(not(target_arch = "wasm32"))]
             smoke_capture_requested: false,
             editor: (*text).clone(),
             full_text: text.clone(),
@@ -459,6 +480,8 @@ impl App {
             pointer: String::new(),
             differences: Vec::new(),
             comparison_done: false,
+            #[cfg(target_arch = "wasm32")]
+            files: browser::Files::new(ctx.clone()),
             jobs,
             revision: 0,
             auto_due: None,
@@ -472,6 +495,9 @@ impl App {
             queued_actions: std::collections::VecDeque::new(),
             completed,
         };
+        #[cfg(target_arch = "wasm32")]
+        app.parse(Format::Keep);
+        #[cfg(not(target_arch = "wasm32"))]
         if cfg!(test) {
             app.parse(Format::Keep);
         } else if let Some(path) = std::env::args_os()
@@ -542,7 +568,12 @@ impl App {
             job,
             Job::Locate(..) | Job::Inspect(..) | Job::SourcePointer(..) | Job::LocateDiff(..)
         );
-        let reset_view = matches!(job, Job::Open(_));
+        let reset_view = match job {
+            Job::Import(..) => true,
+            #[cfg(not(target_arch = "wasm32"))]
+            Job::Open(_) => true,
+            _ => false,
+        };
         if self
             .jobs
             .send(Work {
@@ -599,6 +630,34 @@ impl App {
     }
 
     fn receive(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        while let Ok(event) = self.files.events.try_recv() {
+            match event {
+                browser::FileEvent::Opened { name, text } => {
+                    self.filename = name.clone();
+                    self.revision += 1;
+                    let job = Job::Import(Arc::new(text), name);
+                    if self.busy {
+                        self.queued_actions.push_back(QueuedAction {
+                            job,
+                            revision: self.revision,
+                        });
+                    } else {
+                        self.submit(job);
+                    }
+                }
+                browser::FileEvent::Saved(name) => {
+                    self.error = false;
+                    self.status = format!("Downloaded {name}");
+                    self.notify(feedback::Kind::Success, self.status.clone());
+                }
+                browser::FileEvent::Error(error) => {
+                    self.error = true;
+                    self.status = error;
+                    self.notify(feedback::Kind::Error, self.status.clone());
+                }
+            }
+        }
         while let Ok(done) = self.completed.try_recv() {
             self.busy = false;
             self.automatic_job = false;
@@ -687,6 +746,7 @@ impl App {
                         self.compare_right_range = right;
                     }
                 }
+                #[cfg(not(target_arch = "wasm32"))]
                 Ok(Output::Saved) => {
                     self.error = false;
                     self.status = "File saved".into();
@@ -778,83 +838,88 @@ impl eframe::App for App {
         if self.search.jump {
             self.prepare_search_jump();
         }
-        if self.smoke_test {
-            let capture = ctx.input(|input| {
-                input.events.iter().find_map(|event| {
-                    if let egui::Event::Screenshot { image, .. } = event {
-                        Some(image.clone())
-                    } else {
-                        None
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.smoke_test {
+                let capture = ctx.input(|input| {
+                    input.events.iter().find_map(|event| {
+                        if let egui::Event::Screenshot { image, .. } = event {
+                            Some(image.clone())
+                        } else {
+                            None
+                        }
+                    })
+                });
+                if let Some(image) = capture {
+                    if let Some(path) = std::env::var_os("JSON_LENS_CAPTURE") {
+                        let mut bytes =
+                            format!("P6\n{} {}\n255\n", image.size[0], image.size[1]).into_bytes();
+                        for pixel in &image.pixels {
+                            bytes.extend_from_slice(&pixel.to_array()[..3]);
+                        }
+                        std::fs::write(path, bytes).expect("save UI capture");
                     }
-                })
-            });
-            if let Some(image) = capture {
-                if let Some(path) = std::env::var_os("JSON_LENS_CAPTURE") {
-                    let mut bytes =
-                        format!("P6\n{} {}\n255\n", image.size[0], image.size[1]).into_bytes();
-                    for pixel in &image.pixels {
-                        bytes.extend_from_slice(&pixel.to_array()[..3]);
-                    }
-                    std::fs::write(path, bytes).expect("save UI capture");
-                }
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        }
-        if self.smoke_test && self.document.is_some() && !self.busy {
-            self.smoke_frames += 1;
-            ctx.request_repaint();
-            if self.smoke_frames == 1 && std::env::var_os("JSON_LENS_COMPARE").is_some() {
-                self.view = View::Compare;
-                self.compare_text = self.editor.replace("Getting started", "Changed item");
-                if std::env::var_os("JSON_LENS_ALIGN").is_some() {
-                    let mut right: Value = serde_json::from_str(&self.compare_text).unwrap();
-                    right["items"][0]["extra"] = serde_json::json!({"nested": true});
-                    self.compare_text = serde_json::to_string_pretty(&right).unwrap();
-                }
-                self.submit(Job::Compare(
-                    self.full_text.clone(),
-                    Arc::new(self.compare_text.clone()),
-                ));
-            }
-            if self.smoke_frames == 1 && std::env::var_os("JSON_LENS_FEEDBACK").is_some() {
-                self.parse(Format::Pretty);
-            }
-            if self.smoke_frames == 1
-                && std::env::var_os("JSON_LENS_EDIT").is_some()
-                && let Some(doc) = self.document.clone()
-            {
-                self.pointer = "/items/0/name".into();
-                self.submit(Job::Inspect(doc, self.pointer.clone()));
-            }
-            if self.smoke_frames == 1 && std::env::var_os("JSON_LENS_SEARCH").is_some() {
-                self.search.text.visible = true;
-                self.search.tree.visible = true;
-                self.search.text.query = "name".into();
-                self.search.text.changed();
-                self.search.tree.query = "name".into();
-                self.search.tree.changed();
-            }
-            if self.smoke_frames >= 10
-                && !self.smoke_capture_requested
-                && (std::env::var_os("JSON_LENS_SEARCH").is_none()
-                    || (!self.search.text.pending && !self.search.tree.pending))
-            {
-                self.smoke_capture_requested = true;
-                println!(
-                    "Native window rendered · {} · {}",
-                    self.gpu_info, self.status
-                );
-                if std::env::var_os("JSON_LENS_CAPTURE").is_some() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
-                } else {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
-        }
-        if self.smoke_test && std::env::var_os("JSON_LENS_GRAPH").is_some() {
-            self.view = View::Graph;
-            if std::env::var_os("JSON_LENS_GRAPH_WIDE").is_some() {
-                self.graph_wide = true;
+            if self.smoke_test && self.document.is_some() && !self.busy {
+                self.smoke_frames += 1;
+                ctx.request_repaint();
+                if self.smoke_frames == 1 && std::env::var_os("JSON_LENS_COMPARE").is_some() {
+                    self.view = View::Compare;
+                    self.compare_text = self.editor.replace("Getting started", "Changed item");
+                    if std::env::var_os("JSON_LENS_ALIGN").is_some() {
+                        let mut right: Value = serde_json::from_str(&self.compare_text).unwrap();
+                        right["items"][0]["extra"] = serde_json::json!({"nested": true});
+                        self.compare_text = serde_json::to_string_pretty(&right).unwrap();
+                    }
+                    self.submit(Job::Compare(
+                        self.full_text.clone(),
+                        Arc::new(self.compare_text.clone()),
+                    ));
+                }
+                if self.smoke_frames == 1 && std::env::var_os("JSON_LENS_FEEDBACK").is_some() {
+                    self.parse(Format::Pretty);
+                }
+                if self.smoke_frames == 1
+                    && std::env::var_os("JSON_LENS_EDIT").is_some()
+                    && let Some(doc) = self.document.clone()
+                {
+                    self.pointer = "/items/0/name".into();
+                    self.submit(Job::Inspect(doc, self.pointer.clone()));
+                }
+                if self.smoke_frames == 1 && std::env::var_os("JSON_LENS_SEARCH").is_some() {
+                    self.search.text.visible = true;
+                    self.search.tree.visible = true;
+                    self.search.text.query = "name".into();
+                    self.search.text.changed();
+                    self.search.tree.query = "name".into();
+                    self.search.tree.changed();
+                }
+                if self.smoke_frames >= 10
+                    && !self.smoke_capture_requested
+                    && (std::env::var_os("JSON_LENS_SEARCH").is_none()
+                        || (!self.search.text.pending && !self.search.tree.pending))
+                {
+                    self.smoke_capture_requested = true;
+                    println!(
+                        "Native window rendered · {} · {}",
+                        self.gpu_info, self.status
+                    );
+                    if std::env::var_os("JSON_LENS_CAPTURE").is_some() {
+                        ctx.send_viewport_cmd(
+                            egui::ViewportCommand::Screenshot(Default::default()),
+                        );
+                    } else {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
+            if self.smoke_test && std::env::var_os("JSON_LENS_GRAPH").is_some() {
+                self.view = View::Graph;
+                if std::env::var_os("JSON_LENS_GRAPH_WIDE").is_some() {
+                    self.graph_wide = true;
+                }
             }
         }
         self.workspace(ctx);
@@ -864,6 +929,7 @@ impl eframe::App for App {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
     eframe::run_native(
         "JSON Lens",
@@ -882,9 +948,38 @@ fn main() -> eframe::Result {
     )
 }
 
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    browser::start();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_browser_text_uses_the_same_json_and_csv_processing() {
+        let json: Arc<String> = Arc::new("{\"中文\":123456789012345678901234567890}".into());
+        let Output::Document(doc, _) =
+            execute(Job::Import(json.clone(), "example.json".into())).unwrap()
+        else {
+            panic!("document expected");
+        };
+        assert_eq!(*doc.text, *json);
+        let Output::Document(doc, _) = execute(Job::Import(
+            Arc::new("name,value\n中文,42\n".into()),
+            "example.CSV".into(),
+        ))
+        .unwrap() else {
+            panic!("document expected");
+        };
+        assert_eq!(doc.value[0]["name"], "中文");
+        assert_eq!(doc.value[0]["value"], "42");
+        assert!(matches!(
+            execute(Job::Import(Arc::new("{bad}".into()), "bad.json".into())).unwrap(),
+            Output::Invalid(..)
+        ));
+    }
 
     fn ready_app() -> App {
         let mut app = App::create(egui::Context::default(), "test".into());
@@ -965,7 +1060,7 @@ mod tests {
     fn actions_clicked_during_auto_refresh_run_in_order_on_the_latest_document() {
         let mut app = ready_app();
         let (sender, receiver) = mpsc::channel();
-        app.jobs = sender;
+        app.jobs = sender.into();
         app.busy = true;
         app.automatic_job = true;
         app.parse(Format::SortAscending);
@@ -1010,7 +1105,7 @@ mod tests {
     fn formatting_unchanged_content_still_reports_success() {
         let mut app = ready_app();
         let (sender, receiver) = mpsc::channel();
-        app.jobs = sender;
+        app.jobs = sender.into();
         app.parse(Format::Pretty);
         finish(&mut app, receiver.recv().unwrap());
         assert!(
@@ -1026,7 +1121,7 @@ mod tests {
     fn failed_validation_reports_a_visible_error() {
         let mut app = ready_app();
         let (sender, receiver) = mpsc::channel();
-        app.jobs = sender;
+        app.jobs = sender.into();
         app.editor = "{bad}".into();
         app.dirty = true;
         app.parse(Format::Keep);
@@ -1042,6 +1137,7 @@ mod tests {
         app.view = View::Compare;
         app.editor = "{}".into();
         let ctx = egui::Context::default();
+        ui::install_fonts(&ctx);
         ui::configure(&ctx, false);
         let position = egui::pos2(300.0, 1050.0);
         for (frame, events) in [
@@ -1087,7 +1183,7 @@ mod tests {
     fn compare_rows_and_gutters_remain_aligned_when_scrolling_the_right_editor() {
         let mut app = ready_app();
         let (sender, receiver) = mpsc::channel();
-        app.jobs = sender;
+        app.jobs = sender.into();
         let values: Vec<_> = (0..100).collect();
         app.editor = serde_json::to_string_pretty(&values).unwrap();
         app.dirty = true;
@@ -1101,6 +1197,7 @@ mod tests {
         );
         finish(&mut app, receiver.recv().unwrap());
         let ctx = egui::Context::default();
+        ui::install_fonts(&ctx);
         ui::configure(&ctx, false);
         for frame in 0..6 {
             let events = if frame == 1 {
@@ -1146,6 +1243,12 @@ mod tests {
                 matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.job.text == app.editor)
             }).unwrap().clip_rect;
             assert!(left_clip.bottom() > 720.0);
+            if frame == 0 {
+                assert!(
+                    left_clip.top() < 200.0,
+                    "editor header reserves too much space"
+                );
+            }
             let right = text_shapes
                 .iter()
                 .find(|text| text.galley.job.text == app.compare_text)
@@ -1178,7 +1281,7 @@ mod tests {
     fn pasted_json_automatically_highlights_without_moving_the_editor_cursor() {
         let mut app = ready_app();
         let (sender, receiver) = mpsc::channel();
-        app.jobs = sender;
+        app.jobs = sender.into();
         app.view = View::Compare;
         app.compare_text = app.editor.replace("Getting started", "Changed item");
         app.clear_comparison();
@@ -1205,7 +1308,7 @@ mod tests {
     fn automatic_comparison_discards_stale_results_and_recovers_from_invalid_input() {
         let mut app = ready_app();
         let (sender, receiver) = mpsc::channel();
-        app.jobs = sender;
+        app.jobs = sender.into();
         app.view = View::Compare;
         app.compare_text = "{}".into();
         app.clear_comparison();
@@ -1232,7 +1335,7 @@ mod tests {
     fn left_edits_parse_before_refreshing_automatic_comparison() {
         let mut app = ready_app();
         let (sender, receiver) = mpsc::channel();
-        app.jobs = sender;
+        app.jobs = sender.into();
         app.view = View::Compare;
         app.editor = "{\"value\":2}".into();
         app.search_source = Arc::new(app.editor.clone());
@@ -1313,7 +1416,7 @@ mod tests {
         let mut app = ready_app();
         let left = app.full_text.clone();
         let (sender, receiver) = mpsc::channel();
-        app.jobs = sender;
+        app.jobs = sender.into();
         app.submit(Job::FormatRight(Arc::new("{\"right\":true}".into())));
         finish(&mut app, receiver.recv().unwrap());
         assert_eq!(*app.full_text, *left);

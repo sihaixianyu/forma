@@ -43,8 +43,24 @@ fn kind(value: &Value) -> &'static str {
     }
 }
 
-/// Containers become connected cards; scalar properties appear as rows in their parent.
+/// Objects and arrays become connected cards, with indexed element rows for arrays.
 pub fn build_graph(value: &Value) -> Graph {
+    fn row_value(value: &Value) -> String {
+        if let Value::Array(array) = value {
+            let mut parts: Vec<_> = array
+                .iter()
+                .take(4)
+                .map(|value| preview(&summary(value), 24).to_owned())
+                .collect();
+            if array.len() > 4 {
+                parts.push(format!("… {} items", array.len()));
+            }
+            preview(&format!("[{}]", parts.join(", ")), 100).into()
+        } else {
+            preview(&summary(value), 100).into()
+        }
+    }
+
     fn visit(
         value: &Value,
         pointer: String,
@@ -71,7 +87,7 @@ pub fn build_graph(value: &Value) -> Graph {
                 .map(|(key, value)| Row {
                     pointer: pointer_child(&pointer, key),
                     key: preview(key, 60).into(),
-                    value: preview(&summary(value), 100).into(),
+                    value: row_value(value),
                     kind: kind(value),
                 })
                 .collect(),
@@ -79,10 +95,10 @@ pub fn build_graph(value: &Value) -> Graph {
                 .iter()
                 .take(8)
                 .enumerate()
-                .map(|(i, value)| Row {
-                    pointer: pointer_child(&pointer, &i.to_string()),
-                    key: i.to_string(),
-                    value: preview(&summary(value), 100).into(),
+                .map(|(index, value)| Row {
+                    pointer: pointer_child(&pointer, &index.to_string()),
+                    key: index.to_string(),
+                    value: row_value(value),
                     kind: kind(value),
                 })
                 .collect(),
@@ -108,7 +124,7 @@ pub fn build_graph(value: &Value) -> Graph {
         let mut first = None;
         let mut last = None;
         let mut child = |key: String, value: &Value, graph: &mut Graph, next_y: &mut f32| {
-            if (value.is_array() || value.is_object())
+            if (value.is_object() || value.is_array())
                 && let Some(child) = visit(
                     value,
                     pointer_child(&pointer, &key),

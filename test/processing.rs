@@ -1,4 +1,4 @@
-use json_lens::{Format, compare, csv_to_json, json_to_csv, pointer_child, preview, process};
+use json_lens::{Format, compare, csv_to_json, pointer_child, preview, process};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -124,12 +124,11 @@ fn comparison_handles_missing_null_and_ignores_object_order() {
 }
 
 #[test]
-fn csv_quotes_and_sparse_columns_round_trip() {
-    let value = json!([{"a":"hello, world", "b":"line\nquote\""}, {"a":"中文", "c":"extra"}]);
-    let csv = String::from_utf8(json_to_csv(&value).unwrap()).unwrap();
-    let imported = csv_to_json(&csv).unwrap();
+fn csv_import_handles_quotes_empty_columns_and_unicode() {
+    let imported =
+        csv_to_json("a,b,c\n\"hello, world\",\"line\nquote\"\"\",\n中文,,extra\n").unwrap();
     assert_eq!(imported[0]["a"], "hello, world");
     assert_eq!(imported[0]["b"], "line\nquote\"");
+    assert_eq!(imported[1]["b"], "");
     assert_eq!(imported[1]["c"], "extra");
-    assert!(json_to_csv(&json!([1, 2])).is_err());
 }

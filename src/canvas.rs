@@ -440,7 +440,7 @@ impl Canvas {
                     if node.kind == "array" { "[ ]" } else { "{ }" },
                     node.title
                 ),
-                FontId::monospace(13.0 * self.zoom),
+                FontId::proportional(13.0 * self.zoom),
                 text,
             );
             card_painter.text(
