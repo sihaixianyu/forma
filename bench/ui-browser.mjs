@@ -2,9 +2,9 @@
 // Usage: node bench/ui-browser.mjs [before|after] [pretty|minified]
 import {writeFile} from 'node:fs/promises';
 const label=process.argv[2]??'after', pretty=process.argv[3]!=='minified';
-const row=pretty?'  {\n    "id": 12345,\n    "name": "JSON Lens performance example",\n    "active": true,\n    "data": [1, 2, 3]\n  }':'{"id":12345,"name":"JSON Lens performance example","active":true,"data":[1,2,3]}';
+const row=pretty?'  {\n    "id": 12345,\n    "name": "Forma performance example",\n    "active": true,\n    "data": [1, 2, 3]\n  }':'{"id":12345,"name":"Forma performance example","active":true,"data":[1,2,3]}';
 const source='[\n'+Array(Math.floor(1_000_000/(row.length+2))).fill(row).join(pretty?',\n':',')+'\n]';
-const file=`/private/tmp/json-lens-ui-${pretty?'pretty':'minified'}.json`;
+const file=`/private/tmp/forma-ui-${pretty?'pretty':'minified'}.json`;
 await writeFile(file,source);
 const tabs=await (await fetch('http://127.0.0.1:9227/json/list')).json();
 const ws=new WebSocket(tabs.find(tab=>tab.type==='page').webSocketDebuggerUrl);
@@ -20,7 +20,7 @@ const stopProbe=()=>evaluate(`(()=>{const p=window.uiProbe;p.running=false;const
 try{
   await call('Runtime.enable');await call('Page.enable');
   await call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false});
-  await call('Page.navigate',{url:'http://127.0.0.1:8081/json-lens/?debug=1'});
+  await call('Page.navigate',{url:'http://127.0.0.1:8081/forma/?debug=1'});
   if(!await evaluate(`(async()=>{for(let i=0;i<120;i++){if(window.wasmBindings&&!document.getElementById('loading'))return true;await new Promise(r=>setTimeout(r,250));}return false})()`))throw new Error('App failed to load');
   await pause(500);
   logs.length=0;
@@ -38,7 +38,7 @@ try{
   if(errors.length)throw new Error(JSON.stringify(errors));
   const environment=await evaluate('({user_agent:navigator.userAgent,device_pixel_ratio:devicePixelRatio,cross_origin_isolated:crossOriginIsolated})');
   const result={label,pretty,bytes:source.length,environment,opening,scrolling};
-  await writeFile(`/private/tmp/json-lens-browser-ui-${label}-${pretty?'pretty':'minified'}.json`,JSON.stringify(result,null,2)+'\n');
-  await writeFile(`/private/tmp/json-lens-browser-ui-${label}-${pretty?'pretty':'minified'}.log`,logs.filter(line=>line.includes('[JSON Lens')).join('\n')+'\n');
+  await writeFile(`/private/tmp/forma-browser-ui-${label}-${pretty?'pretty':'minified'}.json`,JSON.stringify(result,null,2)+'\n');
+  await writeFile(`/private/tmp/forma-browser-ui-${label}-${pretty?'pretty':'minified'}.log`,logs.filter(line=>line.includes('[Forma')).join('\n')+'\n');
   console.log(JSON.stringify(result,null,2));
 }finally{ws.close();}

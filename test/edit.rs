@@ -1,4 +1,4 @@
-use json_lens::{
+use forma::{
     Format,
     edit::{rename_key, replace_value, source_range},
     graph::{NODE_WIDTH, build_graph},
@@ -78,7 +78,7 @@ fn viewport_index_agrees_with_full_scan() {
 
 #[test]
 fn source_click_resolves_keys_values_containers_and_array_items() {
-    use json_lens::edit::pointer_at_offset;
+    use forma::edit::pointer_at_offset;
     let text = r#" {"a/b~c":{"名字":"中文🚀"},"items":[{"id":1},false],"tail":null} "#;
     for (fragment, expected) in [
         ("a/b~c", "/a~1b~0c"),
@@ -114,7 +114,7 @@ fn source_click_resolves_keys_values_containers_and_array_items() {
 
 #[test]
 fn source_click_uses_absolute_offsets_in_a_large_document() {
-    use json_lens::edit::pointer_at_offset;
+    use forma::edit::pointer_at_offset;
     let text = format!(
         "{{\"padding\":\"{}\",\"target\":{{\"name\":\"中文\"}}}}",
         "x".repeat(2 * 1024 * 1024)

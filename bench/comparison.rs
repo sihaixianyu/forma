@@ -1,7 +1,7 @@
-use json_lens::{Document, Format, format_document, process};
+use forma::{Document, Format, format_document, process};
 use std::{hint::black_box, sync::Arc, time::Instant};
 
-fn median(mut run: impl FnMut() -> json_lens::Document) -> f64 {
+fn median(mut run: impl FnMut() -> forma::Document) -> f64 {
     for _ in 0..3 {
         drop(black_box(run()));
     }
@@ -22,14 +22,14 @@ fn main() {
         rayon::current_num_threads()
     );
     // All numbers are exactly representable in JS, so both runtimes retain the same values.
-    let row = r#"{"id":123456,"name":"JSON Lens 中文 🚀","active":true,"values":[1,2,3,4]}"#;
+    let row = r#"{"id":123456,"name":"Forma 中文 🚀","active":true,"values":[1,2,3,4]}"#;
     println!("input_mib,implementation,operation,median_ms");
     for mib in [1, 5, 20] {
         let count = mib * 1024 * 1024 / (row.len() + 1);
         let text = Arc::new(format!("[{}]", vec![row; count].join(",")));
         for (implementation, parse) in [
             (
-                "json-lens",
+                "forma",
                 process as fn(Arc<String>, Format) -> Result<Document, String>,
             ),
             ("serde-json", reference_process),
@@ -49,7 +49,7 @@ fn main() {
             ("cached_compact", Format::Compact),
         ] {
             let elapsed = median(|| format_document(&doc, format).unwrap());
-            println!("{mib},json-lens,{name},{elapsed:.3}");
+            println!("{mib},forma,{name},{elapsed:.3}");
         }
     }
 }

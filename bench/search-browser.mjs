@@ -1,8 +1,8 @@
 // Actual WASM large-document search, including browser-shortcut cancellation.
 import {writeFile} from 'node:fs/promises';
-const label=process.argv[2]??'after',appUrl=process.argv[3]??'http://127.0.0.1:8081/json-lens/';
-const source='[\n'+Array(8850).fill('  {\n    "id": 12345,\n    "name": "JSON Lens performance example",\n    "active": true,\n    "data": [1, 2, 3]\n  }').join(',\n')+'\n]';
-const file='/private/tmp/json-lens-search-million.json';await writeFile(file,source);
+const label=process.argv[2]??'after',appUrl=process.argv[3]??'http://127.0.0.1:8081/forma/';
+const source='[\n'+Array(8850).fill('  {\n    "id": 12345,\n    "name": "Forma performance example",\n    "active": true,\n    "data": [1, 2, 3]\n  }').join(',\n')+'\n]';
+const file='/private/tmp/forma-search-million.json';await writeFile(file,source);
 const tabs=await (await fetch('http://127.0.0.1:9227/json/list')).json();
 const ws=new WebSocket(tabs.find(tab=>tab.type==='page').webSocketDebuggerUrl);
 await new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;});
@@ -34,9 +34,9 @@ try {
  for(let i=0;i<12;i++){await call('Input.dispatchMouseEvent',{type:'mouseWheel',x:300,y:400,deltaX:0,deltaY:120});await pause(40);}
  const frames=await evaluate(`(()=>{const p=searchProbe;p.running=false;const gaps=p.gaps.filter(x=>x>=0).sort((a,b)=>a-b);return {median_ms:gaps[Math.floor(gaps.length/2)],p95_ms:gaps[Math.floor(gaps.length*.95)],max_ms:Math.max(...gaps),over_50_ms:gaps.filter(x=>x>50).length,frames:gaps.length}})()`);
  const result={label,url:appUrl,bytes:source.length,shortcut_default_prevented:cancelled,frames,build:await evaluate('({revision:document.documentElement.dataset.buildRevision,mode:document.documentElement.dataset.buildMode,simd:document.documentElement.dataset.wasmSimd})')};
- await writeFile(`/private/tmp/json-lens-search-${label}.json`,JSON.stringify(result,null,2)+'\n');
- await writeFile(`/private/tmp/json-lens-search-${label}.log`,logs.filter(line=>line.includes('[JSON Lens')).join('\n')+'\n');
- const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`/private/tmp/json-lens-search-${label}.png`,Buffer.from(shot.data,'base64'));
+ await writeFile(`/private/tmp/forma-search-${label}.json`,JSON.stringify(result,null,2)+'\n');
+ await writeFile(`/private/tmp/forma-search-${label}.log`,logs.filter(line=>line.includes('[Forma')).join('\n')+'\n');
+ const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`/private/tmp/forma-search-${label}.png`,Buffer.from(shot.data,'base64'));
  if(errors.length)throw new Error(JSON.stringify(errors));
  console.log(JSON.stringify(result,null,2));
 }finally{ws.close();}

@@ -5,7 +5,7 @@ import path from 'node:path';
 // Install jsonc-parser in a temporary directory; no npm dependencies are added to the app.
 const require = createRequire(path.join(path.resolve(process.argv[2] ?? '.'), 'package.json'));
 const { parse } = require('jsonc-parser');
-const row = '{"id":123456,"name":"JSON Lens 中文 🚀","active":true,"values":[1,2,3,4]}';
+const row = '{"id":123456,"name":"Forma 中文 🚀","active":true,"values":[1,2,3,4]}';
 let result;
 function median(run) {
   for (let i = 0; i < 3; i++) result = run();

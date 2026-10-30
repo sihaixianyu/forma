@@ -1,4 +1,4 @@
-use json_lens::{Format, compare, csv_to_json, pointer_child, preview, process};
+use forma::{Format, compare, csv_to_json, pointer_child, preview, process};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -17,9 +17,9 @@ fn retains_source_order_and_exact_numbers() {
 #[test]
 fn cached_format_reuses_the_value_and_sort_preserves_the_original() {
     let original = process(Arc::new(r#"{"z":1,"a":2}"#.into()), Format::Keep).unwrap();
-    let pretty = json_lens::format_document(&original, Format::Pretty).unwrap();
+    let pretty = forma::format_document(&original, Format::Pretty).unwrap();
     assert!(Arc::ptr_eq(&original.value, &pretty.value));
-    let sorted = json_lens::format_document(&original, Format::SortAscending).unwrap();
+    let sorted = forma::format_document(&original, Format::SortAscending).unwrap();
     assert!(!Arc::ptr_eq(&original.value, &sorted.value));
     assert_eq!(
         original

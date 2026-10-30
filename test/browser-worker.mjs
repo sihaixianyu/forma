@@ -1,8 +1,8 @@
 // Run against a Trunk build with --features bench-web and Chrome remote debugging.
 import { writeFile, readFile, mkdir } from 'node:fs/promises';
 const debugUrl = process.argv[2] ?? 'http://127.0.0.1:9227';
-const appUrl = process.argv[3] ?? 'http://127.0.0.1:8081/json-lens/';
-const output = process.argv[4] ?? '/tmp/json-lens-browser';
+const appUrl = process.argv[3] ?? 'http://127.0.0.1:8081/forma/';
+const output = process.argv[4] ?? '/tmp/forma-browser';
 const tabs = await (await fetch(`${debugUrl}/json/list`)).json();
 const page = tabs.find(tab => tab.type === 'page');
 if (!page) throw new Error('No Chrome page available');
@@ -34,11 +34,11 @@ try {
   const ready=await evaluate(`(async()=>{for(let i=0;i<120;i++){if(window.wasmBindings&&!document.getElementById('loading'))return true;await new Promise(r=>setTimeout(r,250));}return false;})()`);
   if(!ready)throw new Error('App failed to load');
   const result=await evaluate(`(async()=>{
-    const w=new Worker(window.jsonLensWorkerConfig.workerUrl,{type:'module'});
+    const w=new Worker(window.formaWorkerConfig.workerUrl,{type:'module'});
     const messages=[],waiting=new Map();let seq=500;
     let ready;const started=new Promise(resolve=>ready=resolve);
     w.onmessage=({data})=>{if(data.type==='ready')ready();else if(data.type==='debug')messages.push(data.text);else{const resolve=waiting.get(data.id);if(resolve){waiting.delete(data.id);resolve(data);}}};
-    w.postMessage({...window.jsonLensWorkerConfig,type:'init'});await started;
+    w.postMessage({...window.formaWorkerConfig,type:'init'});await started;
     const request=async(kind,payload)=>{const id=++seq;const bytes=new TextEncoder().encode(JSON.stringify(payload));const p=new Promise(resolve=>waiting.set(id,resolve));w.postMessage({type:'run',kind,id,payload:bytes},[bytes.buffer]);const result=await p;if(result.type!=='result')throw new Error(result.error);return JSON.parse(new TextDecoder().decode(result.payload));};
     const work=job=>request('work',{job,revision:1,user_action:true});
     const unwrap=r=>{if(r.result.Err)throw new Error(r.result.Err);return r.result.Ok;};
@@ -74,7 +74,7 @@ try {
       const invalidPair=unwrap(await work({Compare:['{bad}','{\\n  "right": }']}));
       if(!invalidPair.InvalidComparison?.[0]||!invalidPair.InvalidComparison?.[1])throw new Error('Both invalid inputs must return diagnostics');
       if(invalidPair.InvalidComparison[1].location[0]!==2)throw new Error('Right syntax location must survive Worker serialization');
-      const row='{"id":123456,"name":"JSON Lens 中文 🚀","active":true,"values":[1,2,3,4]}';
+      const row='{"id":123456,"name":"Forma 中文 🚀","active":true,"values":[1,2,3,4]}';
       const text='['+Array(Math.floor(20*1048576/(new TextEncoder().encode(row).length+1))).fill(row).join(',')+']';
       const payload=new TextEncoder().encode(JSON.stringify({job:{Process:[text,'Keep']},revision:2,user_action:true}));
       const idLarge=++seq;let ticks=0,last=performance.now(),maxGap=0;
@@ -103,9 +103,9 @@ try {
     }finally{w.terminate();}
   })()`);
   console.log(JSON.stringify({...result,worker_logs:undefined},null,2));
-  await writeFile('/private/tmp/json-lens-worker-check.json',JSON.stringify(result,null,2));
+  await writeFile('/private/tmp/forma-worker-check.json',JSON.stringify(result,null,2));
   // Exercise the actual app channel, cached formatting and full-source saving.
-  const downloadDir = `/private/tmp/json-lens-worker-downloads-${process.pid}`;
+  const downloadDir = `/private/tmp/forma-worker-downloads-${process.pid}`;
   await mkdir(downloadDir,{recursive:true});
   await call('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:downloadDir});
   const pause=ms=>evaluate(`new Promise(r=>setTimeout(r,${ms}))`);
@@ -167,6 +167,6 @@ try {
   if(!logs.some(line=>line.includes('realm=worker')&&line.includes('stage=search_text')))throw new Error('App source search did not use Worker');
   if(logs.some(line=>line.includes('realm=main')&&/stage=(parse_sonic|parse_serde|graph_build|compare_walk|search_tree|search_text)/.test(line)))throw new Error('CPU processing leaked onto main thread');
   if(errors.length)throw new Error(JSON.stringify(errors));
-  await writeFile('/private/tmp/json-lens-worker-ui.log',logs.filter(line=>line.includes('[JSON Lens')).join('\n')+'\n');
+  await writeFile('/private/tmp/forma-worker-ui.log',logs.filter(line=>line.includes('[Forma')).join('\n')+'\n');
   console.log('App editor, cached Format, exact-number download, automatic Compare and search passed');
-}finally{await writeFile('/private/tmp/json-lens-worker-ui.log',logs.filter(line=>line.includes('[JSON Lens')).join('\n')+'\n');ws.close();}
+}finally{await writeFile('/private/tmp/forma-worker-ui.log',logs.filter(line=>line.includes('[Forma')).join('\n')+'\n');ws.close();}

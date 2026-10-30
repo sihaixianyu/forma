@@ -1,11 +1,11 @@
-# json4u 执行流程研究与 JSON Lens 改进
+# json4u 执行流程研究与 Forma 改进
 
-本轮以相邻的 `json4u` 源码为依据，优化独立的 Rust 项目 `json-lens`。
+本轮以相邻的 `json4u` 源码为依据，优化独立的 Rust 项目 `forma`。
 没有修改浏览器项目。研究重点是交互如何触发解析、定位、编辑与视口更新。
 
 ## 原版行为与迁移结果
 
-| 原版入口 | 执行行为 | JSON Lens 本轮改进 |
+| 原版入口 | 执行行为 | Forma 本轮改进 |
 | --- | --- | --- |
 | `src/containers/editor/graph/Graph.tsx` → `useVirtualGraph.ts` → `src/lib/graph/virtual.ts` | 根据视口生成可渲染子图，裁剪属性行，并控制屏外连线数量 | 按布局列建立索引；缓存折叠状态、边界和可见节点；静止帧不重复扫描整个图；每个可见父节点最多处理 10 条屏外子节点连接 |
 | `src/containers/editor/graph/KV.tsx` → `useClickNode.ts` → `Editor.tsx::useRevealNode` | 键和值点击生成 reveal position，再选中编辑器中的节点文本 | 卡片属性行有独立 JSON Pointer；点击定位到原始文本范围；大文件预览移动到对应位置 |
@@ -15,7 +15,7 @@
 | `Graph.tsx::panOnScroll` 与 `MouseButton.tsx` | 支持鼠标、触控板操作差异 | 滚动平移、Shift + 滚动水平平移、Ctrl/Cmd + 滚动缩放；支持触控板捏合 |
 | `ViewSearchInput.tsx` → worker `searchInView` | 搜索结果携带节点 ID、目标和路径，选中后统一定位 | 保留键和值的路径定位；重用路径缓冲，减少全量遍历时的临时分配 |
 
-浏览器版明确设置 `nodesDraggable={false}`。JSON Lens 仍保留已有的卡片拖动，
+浏览器版明确设置 `nodesDraggable={false}`。Forma 仍保留已有的卡片拖动，
 这是原生版提供的额外操作，并不是对原版配置的逐项照搬。
 
 ## 性能变化
@@ -48,7 +48,7 @@
 画布基准通过 egui 的真实更新路径运行，但不创建 GPU 窗口，因此这些数字
 代表 CPU 侧的帧准备成本，不能解释为 GPU 帧率。图构建和搜索计时包含临时结果
 的销毁；数据生成、磁盘读取及首次字体加载在计时前完成或未包含在该基准中。
-这些是 JSON Lens 前后对比，不是与浏览器版 json4u 的直接速度比较。
+这些是 Forma 前后对比，不是与浏览器版 json4u 的直接速度比较。
 
 复现命令：
 

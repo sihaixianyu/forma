@@ -10,7 +10,7 @@ contents, property values or filenames. DEBUG is disabled by default.
 Native logs go to stderr:
 
 ```sh
-JSON_LENS_LOG=debug cargo run --release --locked 2> debug.log
+FORMA_LOG=debug cargo run --release --locked 2> debug.log
 ```
 
 Browser: open the app with `?debug=1`, then open DevTools Console and enable
@@ -20,11 +20,11 @@ without the query parameter to disable DEBUG.
 Example fields:
 
 ```text
-[JSON Lens DEBUG] job=4 event=job_dequeued queue_ms=4.300
-[JSON Lens DEBUG] job=4 event=work_metadata revision=2 user_action=false reset_view=false
-[JSON Lens DEBUG] job=4 event=parser_path parser=sonic simd128=true parallel=false
-[JSON Lens DEBUG] job=4 event=stage stage=parse_sonic bytes=52835 elapsed_ms=0.100
-[JSON Lens DEBUG] job=4 event=compare_result differences=1
+[Forma DEBUG] job=4 event=job_dequeued queue_ms=4.300
+[Forma DEBUG] job=4 event=work_metadata revision=2 user_action=false reset_view=false
+[Forma DEBUG] job=4 event=parser_path parser=sonic simd128=true parallel=false
+[Forma DEBUG] job=4 event=stage stage=parse_sonic bytes=52835 elapsed_ms=0.100
+[Forma DEBUG] job=4 event=compare_result differences=1
 ```
 
 ## Analyze
@@ -83,7 +83,7 @@ stage timers do not read the clock or allocate log messages.
 Native processing logs can also be generated without opening a GUI:
 
 ```sh
-JSON_LENS_LOG=debug cargo bench --bench processing --locked 2> debug.log
+FORMA_LOG=debug cargo bench --bench processing --locked 2> debug.log
 ```
 
 For measured browser comparisons and automatic log capture, see the

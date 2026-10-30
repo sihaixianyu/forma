@@ -1,3 +1,10 @@
+#[cfg(target_arch = "wasm32")]
+#[path = "worker/tasks.rs"]
+pub(crate) mod web_tasks;
+#[cfg(target_arch = "wasm32")]
+#[path = "worker/browser.rs"]
+pub(crate) mod web_worker;
+
 use eframe::egui;
 use std::sync::mpsc;
 #[cfg(not(target_arch = "wasm32"))]
@@ -15,17 +22,17 @@ impl<T> Queued<T> {
     fn new(value: T) -> Self {
         Self {
             value,
-            id: json_lens::diagnostics::next_job(),
-            enqueued: log::log_enabled!(target: "json_lens", log::Level::Debug).then(Instant::now),
+            id: forma::diagnostics::next_job(),
+            enqueued: log::log_enabled!(target: "forma", log::Level::Debug).then(Instant::now),
         }
     }
 
     fn run<R>(self, process: impl FnOnce(T) -> R) -> R {
-        json_lens::diagnostics::in_job(self.id, || {
+        forma::diagnostics::in_job(self.id, || {
             if let Some(enqueued) = self.enqueued {
-                log::debug!(target: "json_lens", "event=job_dequeued queue_ms={:.3}", enqueued.elapsed().as_secs_f64()*1000.0);
+                log::debug!(target: "forma", "event=job_dequeued queue_ms={:.3}", enqueued.elapsed().as_secs_f64()*1000.0);
             }
-            let _stage = json_lens::diagnostics::Stage::new("worker_job", 0);
+            let _stage = forma::diagnostics::Stage::new("worker_job", 0);
             process(self.value)
         })
     }
@@ -100,7 +107,7 @@ pub fn spawn<T: Task<R>, R: Send + 'static>(
             for mut request in &receiver {
                 if coalesce {
                     while let Ok(newer) = receiver.try_recv() {
-                        log::debug!(target: "json_lens", "event=job_coalesced dropped_job={} replacement_job={}", request.id, newer.id);
+                        log::debug!(target: "forma", "event=job_coalesced dropped_job={} replacement_job={}", request.id, newer.id);
                         request = newer;
                     }
                 }

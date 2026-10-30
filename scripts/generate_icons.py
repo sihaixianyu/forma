@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate desktop icons from packaging/json-lens.svg (resvg and Pillow)."""
+"""Regenerate desktop icons from packaging/forma.svg (resvg and Pillow)."""
 
 from io import BytesIO
 from pathlib import Path
@@ -15,7 +15,7 @@ SIZES = (16, 24, 32, 48, 64, 128, 256, 512, 1024)
 def main():
     destination = ROOT / "packaging/icons"
     destination.mkdir(parents=True, exist_ok=True)
-    svg = ElementTree.parse(ROOT / "packaging/json-lens.svg").getroot()
+    svg = ElementTree.parse(ROOT / "packaging/forma.svg").getroot()
     # Desktop tiles occupy 80% of the canvas, matching neighboring Dock icons.
     # The web logo stays full bleed; only the generated desktop assets get padding.
     namespace = "{http://www.w3.org/2000/svg}"
@@ -40,15 +40,15 @@ def main():
             raise ValueError("logo renderer returned an empty or incorrectly sized image")
         for size in SIZES:
             source.resize((size, size), Image.Resampling.LANCZOS).save(
-                destination / f"json-lens-{size}.png", optimize=True,
+                destination / f"forma-{size}.png", optimize=True,
             )
         icon = source.resize((1024, 1024), Image.Resampling.LANCZOS)
         icon.save(
-            destination / "json-lens.ico",
+            destination / "forma.ico",
             sizes=[(size, size) for size in SIZES if size <= 256],
             bitmap_format="bmp",  # Compatible with both Windows and NSIS.
         )
-        icon.save(destination / "json-lens.icns")
+        icon.save(destination / "forma.icns")
     print(f"Generated PNG, ICO and ICNS icons in {destination}")
 
 

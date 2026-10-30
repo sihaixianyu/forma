@@ -1,15 +1,8 @@
 use serde_json::{Map, Value};
 use std::sync::Arc;
 
-pub mod alignment;
-pub mod decode;
-pub mod diagnostics;
-pub mod edit;
-pub mod graph;
-mod parser;
-pub mod search;
-
-pub use parser::parse_json;
+mod core;
+pub use core::{alignment, decode, diagnostics, edit, graph, parse_json, search};
 
 pub const EDIT_LIMIT: usize = 8 * 1024 * 1024;
 pub const PREVIEW_LIMIT: usize = 16 * 1024;
@@ -31,7 +24,7 @@ pub struct Document {
 
 pub fn process(text: Arc<String>, format: Format) -> Result<Document, String> {
     let _stage = diagnostics::Stage::new("process", text.len());
-    log::debug!(target: "json_lens", "event=format_request format={format:?} cached=false");
+    log::debug!(target: "forma", "event=format_request format={format:?} cached=false");
     let value = parse_json(&text)?;
     format_owned(
         Document {
@@ -44,7 +37,7 @@ pub fn process(text: Arc<String>, format: Format) -> Result<Document, String> {
 
 // Reuse the validated value when formatting; mutations copy only when it is shared.
 pub fn format_document(document: &Document, format: Format) -> Result<Document, String> {
-    log::debug!(target: "json_lens", "event=format_request format={format:?} cached=true");
+    log::debug!(target: "forma", "event=format_request format={format:?} cached=true");
     format_owned(
         Document {
             text: document.text.clone(),

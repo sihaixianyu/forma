@@ -20,7 +20,7 @@ def resolve():
             check=True, capture_output=True, text=True,
         )
         version = next(package["version"] for package in json.loads(metadata.stdout)["packages"]
-                       if package["name"] == "json-lens")
+                       if package["name"] == "forma")
     if not re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", version):
         raise SystemExit("Release version must be a semantic version without leading v")
     prerelease = os.environ.get("INPUT_PRERELEASE") == "true" or "-" in version

@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,26 +22,27 @@ def licenses(destination):
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "LICENSE", destination / "LICENSE")
     shutil.copy2(ROOT / "assets/fonts/OFL.txt", destination / "FONT-LICENSE.txt")
+    shutil.copy2(ROOT / "assets/fonts/JetBrainsMono-OFL.txt", destination / "JETBRAINS-LICENSE.txt")
     shutil.copy2(ROOT / "assets/fonts/Inter-OFL.txt", destination / "INTER-LICENSE.txt")
-    shutil.copy2(ROOT / "assets/fonts/Bungee-OFL.txt", destination / "BUNGEE-LICENSE.txt")
+    shutil.copy2(ROOT / "assets/fonts/PixelifySans-OFL.txt", destination / "PIXELIFY-LICENSE.txt")
 
 
 def macos(binary, version, arch, output, stage):
     image = stage / "image"
-    contents = image / "JSON Lens.app/Contents"
-    executable = contents / "MacOS/json-lens"
+    contents = image / "Forma.app/Contents"
+    executable = contents / "MacOS/forma"
     executable.parent.mkdir(parents=True)
     shutil.copy2(binary, executable)
     executable.chmod(0o755)
     licenses(contents / "Resources")
-    shutil.copy2(ROOT / "packaging/icons/json-lens.icns", contents / "Resources/json-lens.icns")
+    shutil.copy2(ROOT / "packaging/icons/forma.icns", contents / "Resources/forma.icns")
     with (contents / "Info.plist").open("wb") as file:
         plistlib.dump({
-            "CFBundleName": "JSON Lens",
-            "CFBundleDisplayName": "JSON Lens",
-            "CFBundleIdentifier": "io.github.sihaixianyu.json-lens",
-            "CFBundleExecutable": "json-lens",
-            "CFBundleIconFile": "json-lens.icns",
+            "CFBundleName": "Forma",
+            "CFBundleDisplayName": "Forma",
+            "CFBundleIdentifier": "io.github.sihaixianyu.forma",
+            "CFBundleExecutable": "forma",
+            "CFBundleIconFile": "forma.icns",
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": version.split("-")[0].split("+")[0],
             "CFBundleVersion": version.split("-")[0].split("+")[0],
@@ -51,18 +53,18 @@ def macos(binary, version, arch, output, stage):
     os.symlink("/Applications", image / "Applications")
     run("codesign", "--force", "--deep", "--sign", "-", str(contents.parent))
     run("codesign", "--verify", "--deep", "--strict", str(contents.parent))
-    run("hdiutil", "create", "-volname", "JSON Lens", "-srcfolder", str(image),
+    run("hdiutil", "create", "-volname", "Forma", "-srcfolder", str(image),
         "-fs", "HFS+", "-nospotlight", "-format", "UDZO", "-ov",
-        str(output / f"json-lens-macos-{arch}-{version}.dmg"))
+        str(output / f"forma-macos-{arch}-{version}.dmg"))
 
 
 def windows(binary, version, arch, output, stage):
     # A standalone binary is useful alongside the installer.
-    shutil.copy2(binary, output / f"json-lens-windows-{arch}-{version}.exe")
-    shutil.copy2(binary, stage / "json-lens.exe")
-    shutil.copy2(ROOT / "packaging/icons/json-lens.ico", stage / "json-lens.ico")
+    shutil.copy2(binary, output / f"forma-windows-{arch}-{version}.exe")
+    shutil.copy2(binary, stage / "forma.exe")
+    shutil.copy2(ROOT / "packaging/icons/forma.ico", stage / "forma.ico")
     licenses(stage)
-    installer = output / f"json-lens-windows-{arch}-{version}-setup.exe"
+    installer = output / f"forma-windows-{arch}-{version}-setup.exe"
     nsis = shutil.which("makensis")
     if not nsis:
         nsis = str(Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / "NSIS/makensis.exe")
@@ -71,42 +73,42 @@ def windows(binary, version, arch, output, stage):
 
 
 def linux(binary, version, arch, output, stage):
-    portable = stage / "portable/json-lens"
+    portable = stage / "portable/forma"
     portable.mkdir(parents=True)
-    executable = portable / "json-lens"
+    executable = portable / "forma"
     shutil.copy2(binary, executable)
     executable.chmod(0o755)
     licenses(portable)
-    shutil.copy2(ROOT / "packaging/json-lens.svg", portable / "json-lens.svg")
-    shutil.copy2(ROOT / "packaging/icons/json-lens-256.png", portable / "json-lens.png")
-    shutil.copy2(ROOT / "packaging/json-lens.desktop", portable / "json-lens.desktop")
-    with tarfile.open(output / f"json-lens-linux-{arch}-{version}.tar.gz", "w:gz") as archive:
-        archive.add(portable, arcname="json-lens")
+    shutil.copy2(ROOT / "packaging/forma.svg", portable / "forma.svg")
+    shutil.copy2(ROOT / "packaging/icons/forma-256.png", portable / "forma.png")
+    shutil.copy2(ROOT / "packaging/forma.desktop", portable / "forma.desktop")
+    with tarfile.open(output / f"forma-linux-{arch}-{version}.tar.gz", "w:gz") as archive:
+        archive.add(portable, arcname="forma")
 
     package = stage / "deb"
     (package / "usr/bin").mkdir(parents=True)
-    shutil.copy2(executable, package / "usr/bin/json-lens")
-    licenses(package / "usr/share/doc/json-lens")
+    shutil.copy2(executable, package / "usr/bin/forma")
+    licenses(package / "usr/share/doc/forma")
     for resource, destination in [
-        ("json-lens.desktop", "usr/share/applications/json-lens.desktop"),
-        ("json-lens.svg", "usr/share/icons/hicolor/scalable/apps/json-lens.svg"),
+        ("forma.desktop", "usr/share/applications/forma.desktop"),
+        ("forma.svg", "usr/share/icons/hicolor/scalable/apps/forma.svg"),
     ]:
         target = package / destination
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / "packaging" / resource, target)
 
     for size in (16, 24, 32, 48, 64, 128, 256, 512):
-        target = package / f"usr/share/icons/hicolor/{size}x{size}/apps/json-lens.png"
+        target = package / f"usr/share/icons/hicolor/{size}x{size}/apps/forma.png"
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT / f"packaging/icons/json-lens-{size}.png", target)
+        shutil.copy2(ROOT / f"packaging/icons/forma-{size}.png", target)
 
     # Derive runtime library requirements from the actual executable.
     debian = stage / "debian"
     debian.mkdir()
     (debian / "control").write_text(
-        "Source: json-lens\nSection: utils\nPriority: optional\n"
-        "Maintainer: JSON Lens contributors <noreply@github.com>\n\n"
-        "Package: json-lens\nArchitecture: any\nDescription: Native JSON editor\n",
+        "Source: forma\nSection: utils\nPriority: optional\n"
+        "Maintainer: Forma contributors <noreply@github.com>\n\n"
+        "Package: forma\nArchitecture: any\nDescription: Native JSON editor\n",
         encoding="utf-8",
     )
     requirements = run("dpkg-shlibdeps", "-O", "-e" + str(executable), cwd=stage,
@@ -120,17 +122,17 @@ def linux(binary, version, arch, output, stage):
     deb_version = version.replace("-", "~")
     installed_size = sum(file.stat().st_size for file in (package / "usr").rglob("*") if file.is_file())
     (control / "control").write_text(
-        f"Package: json-lens\nVersion: {deb_version}\nArchitecture: amd64\n"
+        f"Package: forma\nVersion: {deb_version}\nArchitecture: amd64\n"
         "Section: utils\nPriority: optional\n"
-        "Maintainer: JSON Lens contributors <noreply@github.com>\n"
+        "Maintainer: Forma contributors <noreply@github.com>\n"
         f"Depends: {depends}\nInstalled-Size: {(installed_size + 1023) // 1024}\n"
-        "Homepage: https://github.com/sihaixianyu/json-lens\n"
+        "Homepage: https://github.com/sihaixianyu/forma\n"
         "Description: Native JSON editor with graph and comparison views\n"
         " Edit, format, search and compare JSON with GPU rendering.\n",
         encoding="utf-8",
     )
     run("dpkg-deb", "--build", "--root-owner-group", str(package),
-        str(output / f"json-lens-linux-{arch}-{version}.deb"))
+        str(output / f"forma-linux-{arch}-{version}.deb"))
 
 
 def main():
@@ -150,11 +152,14 @@ def main():
         parser.error("Linux and Windows packages currently support x86_64")
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
-    # Never remove an existing directory supplied by the caller.
-    stage = args.stage.resolve() / f"{args.platform}-{args.arch}-{args.version}"
-    stage.mkdir(parents=True, exist_ok=False)
+    stage_root = args.stage.resolve()
+    stage_root.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
-    globals()[args.platform](binary, args.version, args.arch, output, stage)
+    # Isolate each run from cached stages and clean up only its own directory.
+    with tempfile.TemporaryDirectory(
+        prefix=f"{args.platform}-{args.arch}-{args.version}-", dir=stage_root
+    ) as directory:
+        globals()[args.platform](binary, args.version, args.arch, output, Path(directory))
 
 
 if __name__ == "__main__":

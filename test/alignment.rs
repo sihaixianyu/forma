@@ -1,4 +1,4 @@
-use json_lens::alignment::align;
+use forma::alignment::align;
 
 #[test]
 fn inserted_and_deleted_blocks_leave_following_lines_aligned() {

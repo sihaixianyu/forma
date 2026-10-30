@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Forma
+Comment=Edit, explore and compare JSON
+Exec=forma %f
+Icon=forma
+Terminal=false
+Categories=Development;Utility;
+MimeType=application/json;
+StartupNotify=true
+StartupWMClass=forma

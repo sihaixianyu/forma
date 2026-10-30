@@ -37,9 +37,9 @@ fn frame(app: &mut App, ctx: &egui::Context, time: f64, scroll: bool) -> (f64, f
 pub fn run() {
     for pretty in [false, true] {
         let row = if pretty {
-            "  {\n    \"id\": 12345,\n    \"name\": \"JSON Lens performance example\",\n    \"active\": true,\n    \"data\": [1, 2, 3]\n  }"
+            "  {\n    \"id\": 12345,\n    \"name\": \"Forma performance example\",\n    \"active\": true,\n    \"data\": [1, 2, 3]\n  }"
         } else {
-            "{\"id\":12345,\"name\":\"JSON Lens performance example\",\"active\":true,\"data\":[1,2,3]}"
+            "{\"id\":12345,\"name\":\"Forma performance example\",\"active\":true,\"data\":[1,2,3]}"
         };
         let text = Arc::new(format!(
             "[\n{}\n]",
@@ -54,13 +54,13 @@ pub fn run() {
             app.full_text = text.clone();
             app.search_source = text.clone();
             app.editable = true;
-            let doc = Arc::new(json_lens::process(text.clone(), json_lens::Format::Keep).unwrap());
-            app.graph = Arc::new(json_lens::graph::build_graph(&doc.value));
+            let doc = Arc::new(forma::process(text.clone(), forma::Format::Keep).unwrap());
+            app.graph = Arc::new(forma::graph::build_graph(&doc.value));
             app.document = Some(doc);
             app.view = view;
             if app.view == View::Compare {
                 app.compare_text = (*text).clone();
-                app.compare_alignment = Some(Arc::new(json_lens::alignment::align(&text, &text)));
+                app.compare_alignment = Some(Arc::new(forma::alignment::align(&text, &text)));
                 app.comparison_done = true;
             }
             let cold = frame(&mut app, &ctx, 0.0, false);

@@ -1,8 +1,8 @@
 // Run against a Trunk build with --features bench-web and Chrome remote debugging.
 import { writeFile } from 'node:fs/promises';
 const debugUrl = process.argv[2] ?? 'http://127.0.0.1:9227';
-const appUrl = process.argv[3] ?? 'http://127.0.0.1:8081/json-lens/';
-const output = process.argv[4] ?? '/tmp/json-lens-browser';
+const appUrl = process.argv[3] ?? 'http://127.0.0.1:8081/forma/';
+const output = process.argv[4] ?? '/tmp/forma-browser';
 const tabs = await (await fetch(`${debugUrl}/json/list`)).json();
 const page = tabs.find(tab => tab.type === 'page');
 if (!page) throw new Error('No Chrome page available');
@@ -55,7 +55,7 @@ try {
   console.log(`Browser parity checks: ${verified} passed`);
   let csv = 'input_mib,implementation,operation,median_ms\n';
   for (const mib of [1, 5, 20]) {
-    await evaluate(`(()=>{const row='{"id":123456,"name":"JSON Lens 中文 🚀","active":true,"values":[1,2,3,4]}';window.benchInput='['+Array(Math.floor(${mib}*1048576/(new TextEncoder().encode(row).length+1))).fill(row).join(',')+']';})()`);
+    await evaluate(`(()=>{const row='{"id":123456,"name":"Forma 中文 🚀","active":true,"values":[1,2,3,4]}';window.benchInput='['+Array(Math.floor(${mib}*1048576/(new TextEncoder().encode(row).length+1))).fill(row).join(',')+']';})()`);
     for (const parser of ['serde', 'sonic']) {
       const results = JSON.parse(await evaluate(`window.wasmBindings.benchmark_json(window.benchInput, '${parser}')`));
       for (const [operation, ms] of Object.entries(results)) csv += `${mib},wasm-${parser},${operation},${ms.toFixed(3)}\n`;
@@ -85,6 +85,6 @@ try {
   if (!logs.some(line => line.includes('event=compare_result differences=1'))) throw new Error('Automatic comparison incorrect');
   if (errors.length) throw new Error(JSON.stringify(errors));
   await writeFile(`${output}.csv`, csv);
-  await writeFile(`${output}.log`, logs.filter(line => line.includes('[JSON Lens')).join('\n')+'\n');
+  await writeFile(`${output}.log`, logs.filter(line => line.includes('[Forma')).join('\n')+'\n');
   console.log(`Saved ${output}.csv and ${output}.log`);
 } finally { ws.close(); }

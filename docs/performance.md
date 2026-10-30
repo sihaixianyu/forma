@@ -13,7 +13,7 @@ contribute to it. Rust document destruction is outside the timed section.
 
 ## Implementation
 
-JSON Lens uses its production `process` and `format_document` functions.
+Forma uses its production `process` and `format_document` functions.
 Documents of at least 32 KiB use Sonic 0.5.10 SIMD parsing with raw numbers,
 then convert to the existing ordered serde_json value. Containers are
 preallocated; arrays with at least 4096 elements are converted with Rayon.
@@ -42,18 +42,18 @@ single-threaded in Rust. Cached JS serialization is shared by both JS variants.
 
 | Input | Implementation | Parse | Parse + pretty | Parse + minify | Cached pretty | Cached minify |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 MiB | JSON Lens (14 threads) | 1.530 | 3.094 | 2.119 | 1.697 | 0.766 |
-| 1 MiB | JSON Lens (1 thread) | 3.801 | 5.458 | 4.612 | 1.648 | 0.755 |
+| 1 MiB | Forma (14 threads) | 1.530 | 3.094 | 2.119 | 1.697 | 0.766 |
+| 1 MiB | Forma (1 thread) | 3.801 | 5.458 | 4.612 | 1.648 | 0.755 |
 | 1 MiB | Original serde path | 5.044 | 6.656 | 5.890 | — | — |
 | 1 MiB | JS native | 1.833 | 4.403 | 2.637 | 2.615 | 0.833 |
 | 1 MiB | jsonc-parser | 16.848 | 21.413 | 20.207 | — | — |
-| 5 MiB | JSON Lens (14 threads) | 5.996 | 14.758 | 10.748 | 10.089 | 5.204 |
-| 5 MiB | JSON Lens (1 thread) | 19.612 | 28.535 | 24.529 | 8.778 | 4.521 |
+| 5 MiB | Forma (14 threads) | 5.996 | 14.758 | 10.748 | 10.089 | 5.204 |
+| 5 MiB | Forma (1 thread) | 19.612 | 28.535 | 24.529 | 8.778 | 4.521 |
 | 5 MiB | Original serde path | 26.953 | 38.146 | 41.025 | — | — |
 | 5 MiB | JS native | 9.297 | 24.471 | 13.519 | 14.719 | 4.240 |
 | 5 MiB | jsonc-parser | 66.126 | 84.694 | 78.178 | — | — |
-| 20 MiB | JSON Lens (14 threads) | 23.655 | 59.022 | 42.890 | 36.691 | 18.870 |
-| 20 MiB | JSON Lens (1 thread) | 78.278 | 113.429 | 97.674 | 34.596 | 17.267 |
+| 20 MiB | Forma (14 threads) | 23.655 | 59.022 | 42.890 | 36.691 | 18.870 |
+| 20 MiB | Forma (1 thread) | 78.278 | 113.429 | 97.674 | 34.596 | 17.267 |
 | 20 MiB | Original serde path | 106.198 | 146.051 | 130.215 | — | — |
 | 20 MiB | JS native | 44.089 | 105.376 | 63.211 | 59.097 | 17.314 |
 | 20 MiB | jsonc-parser | 278.665 | 344.362 | 319.466 | — | — |
@@ -106,9 +106,9 @@ To reproduce, build the optional benchmark exports, serve `dist/`, and run
 Chrome with a separate test profile and a remote-debugging port:
 
 ```sh
-trunk build --release --features bench-web --public-url /json-lens/
-# After hosting the build at http://127.0.0.1:8081/json-lens/:
-node bench/browser.mjs http://127.0.0.1:9227 http://127.0.0.1:8081/json-lens/ /tmp/json-lens-browser
+trunk build --release --features bench-web --public-url /forma/
+# After hosting the build at http://127.0.0.1:8081/forma/:
+node bench/browser.mjs http://127.0.0.1:9227 http://127.0.0.1:8081/forma/ /tmp/forma-browser
 ```
 
 The script writes CSV results, environment metadata and DEBUG logs, checks
@@ -146,7 +146,7 @@ automatic comparison, JSON download, two-space indentation and formatting
 undo/redo in both editors. Run against the ordinary build:
 
 ```sh
-node test/browser-worker.mjs http://127.0.0.1:9227 http://127.0.0.1:8081/json-lens/
+node test/browser-worker.mjs http://127.0.0.1:9227 http://127.0.0.1:8081/forma/
 ```
 
 The test expects an isolated Chrome session with remote debugging and saves
@@ -258,10 +258,10 @@ covering the canvas and the hidden IME input; it still reaches the app.
 ```sh
 node bench/search-browser.mjs after
 # To inspect the deployed version:
-node bench/search-browser.mjs pages https://sihaixianyu.github.io/json-lens/
+node bench/search-browser.mjs pages https://sihaixianyu.github.io/forma/
 ```
 
-Pages builds set `JSON_LENS_BUILD_REVISION` to the commit SHA. After startup,
+Pages builds set `FORMA_BUILD_REVISION` to the commit SHA. After startup,
 the document element exposes `data-build-revision`, `data-build-mode` and
 `data-wasm-simd`, allowing release/SIMD and deployed revision checks. The Pages
 workflow continues to use `trunk build --release` and the shared SIMD config.
@@ -273,8 +273,8 @@ From the repository root, with Rust and Node.js installed:
 ```sh
 cargo bench --bench comparison --locked
 RAYON_NUM_THREADS=1 cargo bench --bench comparison --locked
-npm install --prefix /tmp/json-lens-comparison --no-audit --no-fund jsonc-parser@3.3.1
-node --expose-gc bench/comparison.mjs /tmp/json-lens-comparison
+npm install --prefix /tmp/forma-comparison --no-audit --no-fund jsonc-parser@3.3.1
+node --expose-gc bench/comparison.mjs /tmp/forma-comparison
 ```
 
 Sources: [Rust](../bench/comparison.rs), [JS/TS libraries](../bench/comparison.mjs).

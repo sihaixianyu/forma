@@ -17,9 +17,9 @@ const stop=()=>evaluate(`(()=>{const p=graphProbe;p.running=false;const gaps=p.g
 const views=()=>logs.filter(line=>line.includes('event=graph_view')).length;
 try{
  await call('Runtime.enable');await call('Page.enable');await call('Page.bringToFront');await call('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:1,mobile:false});
- const url='http://127.0.0.1:8081/json-lens/?debug=1&graph-probe='+Date.now();await call('Page.navigate',{url});
+ const url='http://127.0.0.1:8081/forma/?debug=1&graph-probe='+Date.now();await call('Page.navigate',{url});
  await evaluate(`(async()=>{for(let i=0;i<120;i++){if(location.href===${JSON.stringify(url)}&&window.wasmBindings&&!document.getElementById('loading'))return;await new Promise(r=>setTimeout(r,250))}throw new Error('App did not start')})()`);await pause(350);
- const row='{"id":12345,"name":"JSON Lens performance example","active":true,"data":[1,2,3]}';
+ const row='{"id":12345,"name":"Forma performance example","active":true,"data":[1,2,3]}';
  const source='[\n'+Array(13000).fill(row).join(',\n')+'\n]';
  await click(300,300);await key('a','KeyA',2);await paste(source);await pause(1800);
  // Above the former 1 MiB cutoff, a normal edit must still update the graph.
@@ -29,7 +29,7 @@ try{
  const graph_edit_updated=logs.slice(editStart).some(line=>line.includes('event=graph_result nodes=10000'));
  // Select root explicitly, then wheel over its visible card.
  await click(800,125);await key('a','KeyA',2);await paste('/0');await pause(200);await click(1228,125);await pause(200);
- const loaded=await call('Page.captureScreenshot',{format:'png'});await writeFile(`/private/tmp/json-lens-graph-${label}-loaded.png`,Buffer.from(loaded.data,'base64'));
+ const loaded=await call('Page.captureScreenshot',{format:'png'});await writeFile(`/private/tmp/forma-graph-${label}-loaded.png`,Buffer.from(loaded.data,'base64'));
  await move(780,450);const before=views();await probe();
  for(let i=0;i<8;i++){await call('Input.dispatchMouseEvent',{type:'mouseWheel',x:780,y:450,deltaX:0,deltaY:80});await pause(40)}
  const wheel_views=views()-before,wheel_frames=await stop();
@@ -44,16 +44,16 @@ try{
  const tailStart=logs.length;
  await click(800,125);await key('a','KeyA',2);await paste('/12999/name');await pause(700);
  const tail_focused=logs.slice(tailStart).some(line=>/event=graph_view nodes=2 visible=[1-9]/.test(line));
- const tailShot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`/private/tmp/json-lens-graph-${label}-tail.png`,Buffer.from(tailShot.data,'base64'));
+ const tailShot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`/private/tmp/forma-graph-${label}-tail.png`,Buffer.from(tailShot.data,'base64'));
  const rootStart=logs.length;await click(1228,125);await pause(650);
  const root_restored=logs.slice(rootStart).some(line=>/event=graph_view nodes=10000 visible=[1-9]/.test(line));
  const sourceStart=logs.length;await click(270,741);await pause(700);
  const source_focused=logs.slice(sourceStart).some(line=>/event=graph_view nodes=2 visible=[1-9]/.test(line));
  const empty_views=logs.filter(line=>/event=graph_view nodes=\d+ visible=0\b/.test(line)).length;
  const result={label,bytes:source.length,graph_edit_updated,wheel_views,zoom_views,drag_views,tail_focused,root_restored,source_focused,empty_views,wheel_frames,zoom_frames};
- await writeFile(`/private/tmp/json-lens-graph-${label}.json`,JSON.stringify(result,null,2)+'\n');
- await writeFile(`/private/tmp/json-lens-graph-${label}.log`,logs.join('\n')+'\n');
- const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`/private/tmp/json-lens-graph-${label}.png`,Buffer.from(shot.data,'base64'));
+ await writeFile(`/private/tmp/forma-graph-${label}.json`,JSON.stringify(result,null,2)+'\n');
+ await writeFile(`/private/tmp/forma-graph-${label}.log`,logs.join('\n')+'\n');
+ const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`/private/tmp/forma-graph-${label}.png`,Buffer.from(shot.data,'base64'));
  console.log(JSON.stringify(result,null,2));
  if(label!=='before'&&(!graph_edit_updated||wheel_views===0||zoom_views===0||drag_views===0||!tail_focused||!root_restored||!source_focused||empty_views>0))throw new Error('Graph stopped updating, lost navigation or entered an empty viewport');
  if(logs.some(line=>line.startsWith('EXCEPTION')))throw new Error('Browser exception');

@@ -1,4 +1,4 @@
-use json_lens::{
+use forma::{
     graph::{NODE_LIMIT, NODE_WIDTH, build_graph, build_graph_at},
     search::{TEXT_LIMIT, find_text, find_tree},
 };
@@ -229,12 +229,12 @@ fn large_file_search_reaches_beyond_the_editor_preview() {
 #[test]
 fn graph_preview_cap_preserves_valid_edges_and_reports_truncation() {
     let value = serde_json::Value::Array(
-        (0..json_lens::graph::NODE_LIMIT + 1)
+        (0..forma::graph::NODE_LIMIT + 1)
             .map(|i| json!({"id":i}))
             .collect(),
     );
     let graph = build_graph(&value);
-    assert_eq!(graph.nodes.len(), json_lens::graph::NODE_LIMIT);
+    assert_eq!(graph.nodes.len(), forma::graph::NODE_LIMIT);
     assert!(graph.truncated);
     assert!(
         graph

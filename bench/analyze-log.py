@@ -16,7 +16,7 @@ queues = []
 jobs = collections.defaultdict(list)
 with open(args.log, encoding="utf-8") as stream:
     for line in stream:
-        if "[JSON Lens DEBUG]" not in line:
+        if "[Forma DEBUG]" not in line:
             continue
         fields = dict(re.findall(r"(\w+)=([^\s]+)", line))
         if args.job is not None and fields.get("job") != args.job:

@@ -10,7 +10,7 @@ fn wrapped_comparison_keeps_following_lines_aligned_and_cursor_offsets_intact() 
         "中文 long value ".repeat(12)
     );
     let right = "{\n  \"value\": \"short\",\n  \"last\": true\n}";
-    let alignment = json_lens::alignment::align(&left, right);
+    let alignment = forma::alignment::align(&left, right);
     let _ = ctx.run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             let a = CodeCache::default().layout_width(ui, &left, false, "", 180.0);
@@ -92,7 +92,7 @@ fn comparison_preserves_normal_line_spacing_at_each_pixel_scale() {
         install_fonts(&ctx);
         configure(&ctx, false);
         let source = "{\n  \"name\": \"中文 🚀\",\n  \"value\": 123,\n  \"ready\": true\n}";
-        let alignment = json_lens::alignment::align(source, source);
+        let alignment = forma::alignment::align(source, source);
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             ctx.set_pixels_per_point(scale);
             egui::CentralPanel::default().show(ctx, |ui| {
@@ -111,7 +111,7 @@ fn comparison_preserves_normal_line_spacing_at_each_pixel_scale() {
                     "  \"ready\": true",
                     "  \"extra\": {\n    \"nested\": true\n  },\n  \"ready\": true",
                 );
-                let gaps = json_lens::alignment::align(source, &right);
+                let gaps = forma::alignment::align(source, &right);
                 let aligned = aligned_galley(ui, normal.clone(), Some(&gaps), true);
                 let line_height = normal.rows[0].size.y;
                 for (index, (before, after)) in normal.rows.iter().zip(&aligned.rows).enumerate() {
@@ -133,7 +133,7 @@ fn aligned_text_preserves_cursor_offsets_and_corresponding_row_heights() {
     configure(&ctx, false);
     let left = "{\n\"a\": 1,\n\"last\": \"中文\"\n}";
     let right = "{\n\"a\": 1,\n\"new\": [\n  1\n],\n\"last\": \"中文\"\n}";
-    let alignment = json_lens::alignment::align(left, right);
+    let alignment = forma::alignment::align(left, right);
     let _ = ctx.run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             let a = CodeCache::default().layout(ui, left, false, "");
@@ -212,7 +212,11 @@ fn editor_gutter_stays_outside_horizontal_scrolling() {
                         let (viewport_x, text_x) = previous.unwrap();
                         assert_eq!(viewport_x, scroll.inner_rect.left());
                         assert!(scroll.inner.galley_pos.x < text_x - 50.0);
-                        assert!(scroll.inner_rect.left() > ui.max_rect().left() + 64.0);
+                        assert!(
+                            scroll.inner_rect.left()
+                                > ui.max_rect().left() + EDITOR_GUTTER_WIDTH + EDITOR_GUTTER_GAP
+                                    - 1.0
+                        );
                     }
                 });
             },
@@ -301,10 +305,13 @@ fn code_editor_tab_undo_redo_and_caret_use_the_widget_input_path() {
             assert!(output.shapes.iter().any(|shape| matches!(
                 &shape.shape,
                 egui::Shape::LineSegment { points, stroke }
-                    if stroke.color == Color32::from_rgb(0, 132, 240)
+                if stroke.color == palette(false).text
                         && (stroke.width - 2.0).abs() < 0.01
                         && (points[0].x - points[1].x).abs() < 0.01
-                        && ((points[1].y - points[0].y).abs() - 15.0).abs() < 0.01
+                        && ((points[1].y - points[0].y).abs()
+                            - (EDITOR_FONT_SIZE + 2.0))
+                            .abs()
+                            < 0.01
             )));
         }
     }
@@ -376,7 +383,8 @@ fn code_layout_preserves_font_row_metrics_for_cursor_positions() {
         egui::CentralPanel::default().show(ctx, |ui| {
             for text in ["{\n  \"name\": 1\n}", "", "name\n"] {
                 let galley = cache.layout(ui, text, false, "");
-                let font_height = ui.fonts_mut(|fonts| fonts.row_height(&FontId::monospace(13.0)));
+                let font_height =
+                    ui.fonts_mut(|fonts| fonts.row_height(&FontId::monospace(EDITOR_FONT_SIZE)));
                 let mut offset = 0;
                 for row in &galley.rows {
                     let cursor = egui::text_selection::text_cursor_state::cursor_rect(
@@ -404,7 +412,7 @@ fn wrapped_compare_stays_aligned_after_cached_frames_width_and_theme_changes() {
     install_fonts(&ctx);
     let left = "{\n  \"label\": \"中文 hello hello hello hello hello hello\",\n  \"value\": 42\n}";
     let right = left.replace("  \"value\"", "  \"inserted\": true,\n  \"value\"");
-    let alignment = Arc::new(json_lens::alignment::align(left, &right));
+    let alignment = Arc::new(forma::alignment::align(left, &right));
     let mut left_cache = CodeCache::default();
     let mut right_cache = CodeCache::default();
     for (dark, width) in [
