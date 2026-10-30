@@ -1,34 +1,29 @@
-//! Workspace UI, with editor rendering and pane controls in dedicated modules.
-use super::{App, Job, View};
+//! Workspace controls, document panes, editor rendering, search and shared styles.
+use super::{App, Job, SortState, View};
 use eframe::egui::{self, Color32, FontId, RichText, Stroke, Vec2};
 use json_lens::{Format, preview};
 use std::sync::Arc;
 
-mod cache;
+mod code;
 mod compare;
-mod diagnostics;
-mod edit;
+#[path = "ui/decode.rs"]
+pub(crate) mod decode_ui;
 mod editor;
-mod explorer;
-mod feedback;
-mod files;
-mod layout;
+pub(crate) mod feedback;
 mod search;
 mod source;
-mod theme;
-mod viewport;
-mod widgets;
+mod style;
 mod workspace;
 
-pub use cache::CodeCache;
-use diagnostics::*;
-pub use edit::EditDialog;
+pub use code::CodeCache;
+use code::EDITOR_FONT_SIZE;
+#[cfg(test)]
+use code::{aligned_galley, aligned_wrapped_galley};
 use editor::*;
-use layout::*;
-use theme::{Palette, palette};
-pub use theme::{configure, install_fonts};
-use viewport::*;
-use widgets::*;
+pub use feedback::EditDialog;
+use search::{error_shortcut, reveal_error};
+use style::*;
+pub use style::{configure, install_fonts};
 
 #[cfg(test)]
 mod tests;

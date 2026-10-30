@@ -1,15 +1,8 @@
 use serde_json::{Map, Value};
 use std::sync::Arc;
 
-pub mod alignment;
-pub mod decode;
-pub mod diagnostics;
-pub mod edit;
-pub mod graph;
-mod parser;
-pub mod search;
-
-pub use parser::parse_json;
+mod core;
+pub use core::{alignment, decode, diagnostics, edit, graph, parse_json, search};
 
 pub const EDIT_LIMIT: usize = 8 * 1024 * 1024;
 pub const PREVIEW_LIMIT: usize = 16 * 1024;

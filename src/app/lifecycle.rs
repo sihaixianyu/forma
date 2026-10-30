@@ -1,6 +1,141 @@
 use super::*;
 
 impl App {
+    pub(crate) fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let gpu = cc
+            .wgpu_render_state
+            .as_ref()
+            .map(|state| {
+                let info = state.adapter.get_info();
+                format!("{:?} · {}", info.backend, info.name)
+            })
+            .unwrap_or_else(|| "wgpu".into());
+        Self::create(cc.egui_ctx.clone(), gpu)
+    }
+
+    pub(crate) fn create(ctx: egui::Context, _gpu: String) -> Self {
+        ui::install_fonts(&ctx);
+        ctx.options_mut(|options| options.fallback_theme = egui::Theme::Light);
+        let (sender, completed) = mpsc::channel();
+        let jobs = worker::spawn(ctx.clone(), sender, false, |work: Work| {
+            log::debug!(target: "json_lens", "event=work_metadata revision={} user_action={} reset_view={}", work.revision, work.user_action, work.reset_view);
+            let start = Instant::now();
+            let target = match &work.job {
+                Job::Edit(_, pointer, key, true) => pointer
+                    .rsplit_once('/')
+                    .map(|(parent, _)| json_lens::pointer_child(parent, key)),
+                _ => None,
+            };
+            let result = execute(work.job);
+            Completed {
+                target,
+                label: work.label,
+                user_action: work.user_action,
+                revision: work.revision,
+                reset_view: work.reset_view,
+                result,
+                elapsed: start.elapsed(),
+            }
+        });
+        let text = Arc::new(
+            include_str!("../../assets/example.json")
+                .trim_end()
+                .to_owned(),
+        );
+        let mut app = Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            smoke_test: cfg!(not(target_arch = "wasm32"))
+                && std::env::args().any(|arg| arg == "--smoke-test"),
+            #[cfg(not(target_arch = "wasm32"))]
+            smoke_frames: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            smoke_capture_requested: false,
+            editor: (*text).clone(),
+            full_text: text.clone(),
+            search_source: text,
+            search: find::Search::new(ctx.clone()),
+            preview_start: 0,
+            preview_line: 1,
+            document: None,
+            editable: true,
+            dirty: false,
+            busy: false,
+            status: String::new(),
+            filename: "Untitled.json".into(),
+            dark: ctx.system_theme().unwrap_or(egui::Theme::Light) == egui::Theme::Dark,
+            theme_preference: egui::ThemePreference::System,
+            code: ui::CodeCache::default(),
+            error: false,
+            syntax_error: None,
+            right_syntax_error: None,
+            error_jump: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu_info: _gpu,
+            view: View::Graph,
+            graph: Arc::new(json_lens::graph::Graph::default()),
+            canvas: canvas::Canvas::default(),
+            graph_wide: false,
+            split_ratio: 0.5,
+            active_right: false,
+            sort_state: SortState::Original,
+            sort_original: None,
+            compare_text: String::new(),
+            right_json_valid: false,
+            compare_code: ui::CodeCache::default(),
+            compare_search_source: Arc::new(String::new()),
+            compare_alignment: None,
+            compare_scroll: 0.0,
+            pane_content_top: 0.0,
+            right_header_height: 0.0,
+            source_header_height: 0.0,
+            compare_selected: 0,
+            compare_left_range: None,
+            compare_right_range: None,
+            compare_jump: false,
+            pointer: String::new(),
+            differences: Vec::new(),
+            comparison_done: false,
+            #[cfg(target_arch = "wasm32")]
+            files: browser::Files::new(ctx.clone()),
+            jobs,
+            revision: 0,
+            auto_due: None,
+            compare_due: None,
+            automatic_job: false,
+            pending_reveal: None,
+            pending_source_offset: None,
+            source_target: None,
+            edit_dialog: None,
+            feedback: None,
+            queued_actions: std::collections::VecDeque::new(),
+            completed,
+        };
+        #[cfg(target_arch = "wasm32")]
+        app.parse(Format::Keep);
+        #[cfg(not(target_arch = "wasm32"))]
+        if cfg!(test) {
+            app.parse(Format::Keep);
+        } else if let Some(path) = std::env::args_os()
+            .skip(1)
+            .find(|arg| arg != "--smoke-test")
+        {
+            let path = PathBuf::from(path);
+            app.filename = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into();
+            app.submit(Job::Open(path));
+        } else {
+            app.parse(Format::Keep);
+        }
+        ui::configure(&ctx, app.dark);
+        ctx.set_theme(app.theme_preference);
+        app
+    }
+}
+
+impl App {
     pub(crate) fn receive(&mut self) {
         #[cfg(target_arch = "wasm32")]
         while let Ok(event) = self.files.events.try_recv() {
@@ -17,11 +152,6 @@ impl App {
                     } else {
                         self.submit(job);
                     }
-                }
-                browser::FileEvent::Saved(name) => {
-                    self.error = false;
-                    self.status = format!("Downloaded {name}");
-                    self.notify(feedback::Kind::Success, self.status.clone());
                 }
                 browser::FileEvent::Error(error) => {
                     self.error = true;
@@ -97,6 +227,7 @@ impl App {
                 }
                 Ok(Output::InvalidComparison(left, right)) => {
                     self.syntax_error = left;
+                    self.right_json_valid = right.is_none();
                     self.right_syntax_error = right;
                     self.differences.clear();
                     self.compare_alignment = None;
@@ -125,6 +256,7 @@ impl App {
                 Ok(Output::Comparison(diffs, alignment, left, right)) => {
                     self.syntax_error = None;
                     self.right_syntax_error = None;
+                    self.right_json_valid = true;
                     self.error = false;
                     self.comparison_done = true;
                     self.compare_alignment = Some(alignment);
@@ -155,16 +287,8 @@ impl App {
                         self.compare_right_range = right;
                     }
                 }
-                #[cfg(not(target_arch = "wasm32"))]
-                Ok(Output::Saved) => {
-                    self.error = false;
-                    self.status = "File saved".into();
-                    if done.user_action {
-                        self.notify(feedback::Kind::Success, self.status.clone());
-                    }
-                }
                 Ok(Output::Invalid(text, error)) => {
-                    self.syntax_error = Some(syntax::SyntaxError::new(&error, &text));
+                    self.syntax_error = Some(crate::jobs::SyntaxError::new(&error, &text));
                     self.editable = text.len() <= EDIT_LIMIT || (self.editable && !done.reset_view);
                     self.editor = if self.editable {
                         (*text).clone()
@@ -223,6 +347,7 @@ impl App {
                 }
                 Ok(Output::RightText(text)) => {
                     self.right_syntax_error = None;
+                    self.right_json_valid = true;
                     self.compare_text = (*text).clone();
                     self.search.right.changed();
                     self.clear_comparison();
@@ -237,13 +362,15 @@ impl App {
                 Err(error) => {
                     if let Some(message) = error.strip_prefix("Left JSON: ") {
                         self.syntax_error =
-                            Some(syntax::SyntaxError::new(message, &self.full_text));
+                            Some(crate::jobs::SyntaxError::new(message, &self.full_text));
                     } else if let Some(message) = error.strip_prefix("Right JSON: ") {
+                        self.right_json_valid = false;
                         self.right_syntax_error =
-                            Some(syntax::SyntaxError::new(message, &self.compare_text));
+                            Some(crate::jobs::SyntaxError::new(message, &self.compare_text));
                     } else if done.label == "Format right JSON" {
+                        self.right_json_valid = false;
                         self.right_syntax_error =
-                            Some(syntax::SyntaxError::new(&error, &self.compare_text));
+                            Some(crate::jobs::SyntaxError::new(&error, &self.compare_text));
                     }
                     if let Some(dialog) = &mut self.edit_dialog {
                         dialog.error = error.clone();

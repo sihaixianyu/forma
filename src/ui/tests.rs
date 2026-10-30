@@ -212,7 +212,11 @@ fn editor_gutter_stays_outside_horizontal_scrolling() {
                         let (viewport_x, text_x) = previous.unwrap();
                         assert_eq!(viewport_x, scroll.inner_rect.left());
                         assert!(scroll.inner.galley_pos.x < text_x - 50.0);
-                        assert!(scroll.inner_rect.left() > ui.max_rect().left() + 64.0);
+                        assert!(
+                            scroll.inner_rect.left()
+                                > ui.max_rect().left() + EDITOR_GUTTER_WIDTH + EDITOR_GUTTER_GAP
+                                    - 1.0
+                        );
                     }
                 });
             },
@@ -301,10 +305,13 @@ fn code_editor_tab_undo_redo_and_caret_use_the_widget_input_path() {
             assert!(output.shapes.iter().any(|shape| matches!(
                 &shape.shape,
                 egui::Shape::LineSegment { points, stroke }
-                    if stroke.color == Color32::from_rgb(0, 132, 240)
+                if stroke.color == palette(false).text
                         && (stroke.width - 2.0).abs() < 0.01
                         && (points[0].x - points[1].x).abs() < 0.01
-                        && ((points[1].y - points[0].y).abs() - 15.0).abs() < 0.01
+                        && ((points[1].y - points[0].y).abs()
+                            - (EDITOR_FONT_SIZE + 2.0))
+                            .abs()
+                            < 0.01
             )));
         }
     }
@@ -376,7 +383,8 @@ fn code_layout_preserves_font_row_metrics_for_cursor_positions() {
         egui::CentralPanel::default().show(ctx, |ui| {
             for text in ["{\n  \"name\": 1\n}", "", "name\n"] {
                 let galley = cache.layout(ui, text, false, "");
-                let font_height = ui.fonts_mut(|fonts| fonts.row_height(&FontId::monospace(13.0)));
+                let font_height =
+                    ui.fonts_mut(|fonts| fonts.row_height(&FontId::monospace(EDITOR_FONT_SIZE)));
                 let mut offset = 0;
                 for row in &galley.rows {
                     let cursor = egui::text_selection::text_cursor_state::cursor_rect(

@@ -1,6 +1,47 @@
 use super::*;
 
 impl App {
+    pub(super) fn source_actions(&mut self, ui: &mut egui::Ui, p: Palette) {
+        ui.add_enabled_ui(!self.busy || self.automatic_job, |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.spacing_mut().interact_size = Vec2::new(0.0, 24.0);
+            ui.spacing_mut().button_padding = Vec2::new(8.0, 0.0);
+            let sort = sort_button(ui, p, self.sort_state)
+                .on_hover_text("Click to cycle: original → ascending → descending → original");
+            if sort.clicked() {
+                let state = self.sort_state.after_single_click();
+                if state == SortState::Original {
+                    preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
+                }
+                self.apply_sort_state(state);
+            }
+            segment_divider(ui, p, 16.0);
+            if segmented_button(ui, "\u{f065}  Expand", p, false, Vec2::new(0.0, 24.0))
+                .on_hover_text("Expand JSON encoded in strings")
+                .clicked()
+            {
+                self.reset_sort_state();
+                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
+                self.parse(Format::Nested);
+            }
+            segment_divider(ui, p, 16.0);
+            if segmented_button(ui, "\u{f066}  Minify", p, false, Vec2::new(0.0, 24.0)).clicked() {
+                self.reset_sort_state();
+                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
+                self.parse(Format::Compact);
+            }
+            segment_divider(ui, p, 16.0);
+            if segmented_button(ui, "\u{f036}  Format", p, false, Vec2::new(0.0, 24.0))
+                .on_hover_text("Format JSON · ⌘S / Ctrl+S")
+                .clicked()
+            {
+                self.reset_sort_state();
+                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
+                self.parse(Format::Pretty);
+            }
+        });
+    }
+
     pub(super) fn source_panel(&mut self, ui: &mut egui::Ui, p: Palette) {
         if !self.editable && !self.dirty {
             if self.view == View::Compare && self.editor.len() != self.full_text.len() {
@@ -16,102 +57,15 @@ impl App {
         let height = ui.available_height();
         egui::Frame::new()
             .fill(p.surface)
-            .stroke(Stroke::new(1.0_f32, p.border))
-            .corner_radius(12)
-            .inner_margin(8)
             .show(ui, |ui| {
                 let header_top = ui.cursor().top();
-                ui.set_min_height((height - 18.0).max(100.0));
+                ui.set_min_height(height.max(100.0));
                 ui.set_min_width(ui.available_width());
-                ui.horizontal_wrapped(|ui| {
-                    ui.add_enabled_ui(!self.busy || self.automatic_job, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            if primary(ui, "Format", p)
-                                .on_hover_text("Format JSON · ⌘S / Ctrl+S")
-                                .clicked()
-                            {
-                                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
-                                self.parse(Format::Pretty);
-                            }
-                            if button(ui, "Minify", p).clicked() {
-                                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
-                                self.parse(Format::Compact);
-                            }
-                            if button(ui, "Expand", p)
-                                .on_hover_text("Expand JSON encoded in strings")
-                                .clicked()
-                            {
-                                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
-                                self.parse(Format::Nested);
-                            }
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                if action_button_with_radius(
-                                    ui,
-                                    "Sort",
-                                    p,
-                                    false,
-                                    Vec2::new(76.0, 34.0),
-                                    egui::CornerRadius {
-                                        nw: 7,
-                                        ne: 0,
-                                        sw: 7,
-                                        se: 0,
-                                    },
-                                )
-                                .on_hover_text(if self.sort_descending {
-                                    "Sort keys descending"
-                                } else {
-                                    "Sort keys ascending"
-                                })
-                                .clicked()
-                                {
-                                    preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
-                                    self.parse(if self.sort_descending {
-                                        Format::SortDescending
-                                    } else {
-                                        Format::SortAscending
-                                    });
-                                }
-                                let direction = if self.sort_descending { "↓" } else { "↑" };
-                                if action_button_with_radius(
-                                    ui,
-                                    direction,
-                                    p,
-                                    false,
-                                    Vec2::new(30.0, 34.0),
-                                    egui::CornerRadius {
-                                        nw: 0,
-                                        ne: 7,
-                                        sw: 0,
-                                        se: 7,
-                                    },
-                                )
-                                .on_hover_text("Toggle ascending / descending order")
-                                .clicked()
-                                {
-                                    self.sort_descending = !self.sort_descending;
-                                    self.notify(
-                                        crate::feedback::Kind::Info,
-                                        if self.sort_descending {
-                                            "Sort order: descending"
-                                        } else {
-                                            "Sort order: ascending"
-                                        },
-                                    );
-                                }
-                            });
-                        });
-                    });
-                });
-                ui.add_space(2.0);
-                ui.separator();
-                ui.add_space(2.0);
+                ui.spacing_mut().item_spacing.y = 0.0;
                 self.text_search(ui, p);
                 if self.search.jump {
                     self.prepare_search_jump();
                 }
-                ui.add_space(2.0);
                 if !self.editable {
                     egui::Frame::new()
                         .fill(p.tint)
@@ -178,7 +132,7 @@ impl App {
                         let wrap_width = if self.view == View::Compare {
                             (ui.ctx().content_rect().width()
                                 * self.split_ratio.min(1.0 - self.split_ratio)
-                                - 128.0)
+                                - 104.0)
                                 .max(80.0)
                         } else {
                             ui.available_width().max(80.0)
@@ -231,6 +185,7 @@ impl App {
                             output.state.clone().store(ui.ctx(), output.response.id);
                         }
                         if output.response.changed() {
+                            self.reset_sort_state();
                             self.syntax_error = None;
                             self.revision += 1;
                             self.clear_comparison();

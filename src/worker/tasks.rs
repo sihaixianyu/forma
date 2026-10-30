@@ -50,19 +50,19 @@ pub fn cached(id: u32) -> Option<(Arc<Document>, Arc<Graph>)> {
 }
 
 #[derive(Serialize, Deserialize)]
-pub(super) struct DocRef {
+pub(crate) struct DocRef {
     id: Option<u32>,
     text: Option<Arc<String>>,
 }
 impl DocRef {
-    pub(super) fn new(doc: &Document, force: bool) -> Self {
+    pub(crate) fn new(doc: &Document, force: bool) -> Self {
         let id = token(&doc.value);
         Self {
             id,
             text: (force || id.is_none()).then(|| doc.text.clone()),
         }
     }
-    pub(super) fn resolve(self) -> Result<(Arc<Document>, Arc<Graph>), String> {
+    pub(crate) fn resolve(self) -> Result<(Arc<Document>, Arc<Graph>), String> {
         if let Some(cached) = self.id.and_then(cached) {
             return Ok(cached);
         }
@@ -152,8 +152,8 @@ enum Reply {
     },
     Invalid(Option<Arc<String>>, String),
     InvalidComparison(
-        Option<crate::syntax::SyntaxError>,
-        Option<crate::syntax::SyntaxError>,
+        Option<crate::jobs::SyntaxError>,
+        Option<crate::jobs::SyntaxError>,
     ),
     Comparison(
         Vec<json_lens::Difference>,

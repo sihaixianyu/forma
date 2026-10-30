@@ -1,13 +1,11 @@
+#[cfg(feature = "bench-web")]
+mod bench;
+
 use eframe::egui;
-use std::{
-    cell::Cell,
-    rc::Rc,
-    sync::{Arc, mpsc},
-};
+use std::{cell::Cell, rc::Rc, sync::mpsc};
 
 pub enum FileEvent {
     Opened { name: String, text: String },
-    Saved(String),
     Error(String),
 }
 
@@ -51,42 +49,6 @@ impl Files {
             ctx.request_repaint();
         });
     }
-
-    pub fn save(&self, data: Arc<Vec<u8>>, name: String) {
-        let event = match download(&data, &name) {
-            Ok(()) => FileEvent::Saved(name),
-            Err(error) => FileEvent::Error(format!("Download failed: {error:?}")),
-        };
-        let _ = self.sender.send(event);
-        self.ctx.request_repaint();
-    }
-}
-
-fn download(data: &[u8], name: &str) -> Result<(), wasm_bindgen::JsValue> {
-    use wasm_bindgen::{JsCast, closure::Closure};
-    let window = web_sys::window().unwrap();
-    let document = window.document().unwrap();
-    let bytes = js_sys::Uint8Array::from(data);
-    let parts = js_sys::Array::of1(&bytes);
-    let blob = web_sys::Blob::new_with_u8_array_sequence(&parts)?;
-    let url = web_sys::Url::create_object_url_with_blob(&blob)?;
-    let result = (|| {
-        let anchor = document
-            .create_element("a")?
-            .dyn_into::<web_sys::HtmlAnchorElement>()?;
-        anchor.set_href(&url);
-        anchor.set_download(name);
-        document.body().unwrap().append_child(&anchor)?;
-        anchor.click();
-        anchor.remove();
-        Ok(())
-    })();
-    // Retain the URL long enough for the browser to begin the download.
-    let revoke = Closure::once_into_js(move || {
-        let _ = web_sys::Url::revoke_object_url(&url);
-    });
-    window.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 1000)?;
-    result
 }
 
 fn install_find_shortcut(document: &web_sys::Document) -> Result<(), wasm_bindgen::JsValue> {
@@ -130,7 +92,7 @@ pub fn start() {
             .start(
                 canvas,
                 eframe::WebOptions::default(),
-                Box::new(|cc| Ok(Box::new(super::App::new(cc)))),
+                Box::new(|cc| Ok(Box::new(crate::App::new(cc)))),
             )
             .await
         {

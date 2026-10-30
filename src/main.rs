@@ -9,24 +9,14 @@ use web_time::Instant;
 mod app;
 #[cfg(target_arch = "wasm32")]
 mod browser;
-#[cfg(all(target_arch = "wasm32", feature = "bench-web"))]
-mod browser_bench;
 mod canvas;
-mod decode_ui;
 #[cfg(all(not(target_arch = "wasm32"), feature = "bench-ui"))]
 #[path = "../bench/editor.rs"]
 mod editor_bench;
-mod feedback;
-mod find;
-mod jobs;
-mod syntax;
 mod ui;
-#[cfg(target_arch = "wasm32")]
-mod web_tasks;
-#[cfg(target_arch = "wasm32")]
-mod web_worker;
 mod worker;
 
+use app::{find, jobs};
 use eframe::egui;
 use jobs::*;
 use json_lens::{
@@ -39,11 +29,31 @@ use std::{
     sync::{Arc, mpsc},
     time::Duration,
 };
+use ui::{decode_ui, feedback};
+#[cfg(target_arch = "wasm32")]
+use worker::{web_tasks, web_worker};
 
 #[derive(PartialEq)]
 enum View {
     Graph,
     Compare,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SortState {
+    Original,
+    Ascending,
+    Descending,
+}
+
+impl SortState {
+    fn after_single_click(self) -> Self {
+        match self {
+            Self::Original => Self::Ascending,
+            Self::Ascending => Self::Descending,
+            Self::Descending => Self::Original,
+        }
+    }
 }
 
 struct App {
@@ -60,6 +70,7 @@ struct App {
     dirty: bool,
     busy: bool,
     status: String,
+    #[cfg(not(target_arch = "wasm32"))]
     gpu_info: String,
     filename: String,
     dark: bool,
@@ -70,8 +81,8 @@ struct App {
     preview_start: usize,
     preview_line: usize,
     error: bool,
-    syntax_error: Option<syntax::SyntaxError>,
-    right_syntax_error: Option<syntax::SyntaxError>,
+    syntax_error: Option<crate::jobs::SyntaxError>,
+    right_syntax_error: Option<crate::jobs::SyntaxError>,
     error_jump: Option<bool>,
     view: View,
     graph: Arc<json_lens::graph::Graph>,
@@ -79,8 +90,10 @@ struct App {
     graph_wide: bool,
     split_ratio: f32,
     active_right: bool,
-    sort_descending: bool,
+    sort_state: SortState,
+    sort_original: Option<String>,
     compare_text: String,
+    right_json_valid: bool,
     compare_code: ui::CodeCache,
     compare_search_source: Arc<String>,
     compare_alignment: Option<Arc<json_lens::alignment::Alignment>>,
@@ -121,6 +134,7 @@ fn main() -> eframe::Result {
     }
     let viewport = egui::ViewportBuilder::default()
         .with_app_id("json-lens")
+        .with_title("JSON Lens")
         .with_inner_size(if std::env::var_os("JSON_LENS_NARROW").is_some() {
             [900.0, 650.0]
         } else {
@@ -135,9 +149,9 @@ fn main() -> eframe::Result {
         );
     #[cfg(target_os = "macos")]
     let viewport = viewport
-        .with_fullsize_content_view(true)
-        .with_titlebar_shown(false)
-        .with_title_shown(false);
+        .with_fullsize_content_view(false)
+        .with_titlebar_shown(true)
+        .with_title_shown(true);
     eframe::run_native(
         "JSON Lens",
         eframe::NativeOptions {

@@ -94,7 +94,7 @@ impl SourceRef {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(super) fn process_remote(bytes: &[u8]) -> std::result::Result<Vec<u8>, String> {
+pub(crate) fn process_remote(bytes: &[u8]) -> std::result::Result<Vec<u8>, String> {
     let request: RemoteRequest =
         serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
     let result = match request {

@@ -12,18 +12,29 @@ documents for an automatic, aligned comparison.
 | ![Light graph view](docs/screenshots/light.png) | ![Dark graph view](docs/screenshots/dark.png) |
 | ![Light comparison](docs/screenshots/compare-light.png) | ![Dark comparison](docs/screenshots/compare-dark.png) |
 
-Inter for UI, Maple Mono CN for code. Follows the system theme by default;
-click **Light / Dark** to override it.
+Pixelify Sans Bold for the title, Inter for UI, and Maple Mono CN for code.
+The app follows the system theme by default; click the lamp in the top-right
+toolbar to switch between a soft off-white theme and a dark theme.
+
+The compact top bar contains the logo, title and GitHub link on the left,
+an animated Graph / Compare selector aligned with the editor divider, and
+Sort, Expand, Minify and Format buttons with small icons on the right.
+Each pane has a fixed bottom bar with its path and JSON status. Paths start
+with `~` for the root; hover a truncated path to see it in full. In Compare
+mode, each status reports the validity of its own input independently.
+
+The startup JSON is a bundled [quick-start guide](assets/example.json) with
+features, controls, keyboard shortcuts, project links and run instructions from this README.
 
 ## Key features
 
 - **Automatic comparison:** paste JSON on the right; differences highlight automatically, with aligned rows, fixed gutters and linked scrolling.
-- **Graph ↔ source navigation:** click a value to locate it on either side. Arrays retain indexed element nodes; drag cards, fold branches or reset the bounded canvas.
-  Selecting a branch beyond the initial graph preview loads its local graph; Root returns to the full overview.
-- **Fast editing workflow:** Format, Minify, recursive Sort and Expand JSON encoded in strings. **Ctrl/Cmd + S** formats the active editor; **Ctrl/Cmd + Z** undoes, **Ctrl/Cmd + Shift + Z** or **Ctrl/Cmd + Y** redoes. Tab indents with two spaces. **Ctrl/Cmd + F** toggles search; **Ctrl/Cmd + wheel** zooms the graph.
+- **Graph ↔ source navigation:** the initial view fits the graph overview into the pane. Click a value to locate it on either side, drag to pan, or double-click a card to fold or unfold its branch. Arrays retain indexed element nodes. Selecting a branch beyond the initial graph preview loads its local graph.
+- **Fast editing workflow:** Format, Minify, Expand JSON encoded in strings, and a three-state recursive Sort: click to cycle through original order, ascending, descending, and back to the exact original text. The Sort icon highlights the active direction. **Ctrl/Cmd + S** formats the active editor; **Ctrl/Cmd + Z** undoes, **Ctrl/Cmd + Shift + Z** or **Ctrl/Cmd + Y** redoes. Tab indents with two spaces. **Ctrl/Cmd + F** toggles search; **Ctrl/Cmd + wheel** zooms the graph.
+- **Active-line highlighting:** the focused editor highlights the current line, including wrapped rows, and accents its line number. Click a line number to move the caret to that line.
 - **Readable strings:** both editors wrap long lines automatically. Hover encoded strings for Base64, URL, Hex or nested JSON previews without changing the document.
-- **Syntax diagnostics:** invalid JSON marks the error line in the editor gutter. Hover for details or click to move the cursor; the right pane shows a compact red error status. **Ctrl/Cmd + Shift + E** jumps to the error position. Comparison identifies the invalid input side.
-- **Precise JSON:** preserves object key order and arbitrary-precision numbers. Open JSON/CSV and save JSON; browser files stay local.
+- **Syntax diagnostics:** invalid JSON marks the error line in the editor gutter. Hover for details or click to move the cursor. Each pane's bottom status identifies invalid JSON independently, so an error in one comparison input does not mark the other as invalid. **Ctrl/Cmd + Shift + E** jumps to the error position.
+- **Precise JSON:** preserves object key order and arbitrary-precision numbers. Open JSON/CSV with ⌘O / Ctrl+O; browser files stay local.
 - **Desktop + WebAssembly:** native GPU rendering through wgpu, with WebGPU/WebGL2 in the browser.
 
 ## Performance
@@ -72,7 +83,7 @@ Browser mode, with [Trunk](https://trunkrs.dev/) installed:
 
 ```sh
 rustup target add wasm32-unknown-unknown
-trunk serve --release
+trunk serve --open
 ```
 
 Open **http://127.0.0.1:8080**. `trunk build --release` generates `dist/` for
@@ -84,11 +95,16 @@ web append `?debug=1` and enable **Verbose** in DevTools Console.
 
 ## Source layout
 
-`src/main.rs` defines shared application state and platform entry points.
-`src/app/` handles initialization, job scheduling and results; `src/jobs.rs`
-executes document operations. `src/ui/` separates workspace controls, search,
-source and comparison panes, editor input, layout and rendering caches.
-`src/canvas/` contains graph edge clipping and canvas regression tests.
+`src/main.rs` and `src/lib.rs` are the application and library entry points.
+The `core/` directory holds JSON processing, `app/` holds document jobs and
+search state, `ui/` holds workspace and editor presentation, `browser/` holds
+web startup, and `worker/` holds browser background execution. The top-level
+`app.rs`, `ui.rs`, `canvas.rs` and `worker.rs` are their main modules.
+
+Production files target roughly 500 lines (usually 300–550), with responsibility
+boundaries taking priority over exact line counts. Tests live beside their
+owning modules. Application lifecycle, pane rendering and canvas geometry have
+separate modules because they have distinct responsibilities.
 
 Run `cargo test --locked --all-features` for processing and UI regressions.
 

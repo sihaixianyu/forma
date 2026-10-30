@@ -1,7 +1,7 @@
 #[allow(dead_code, unused_imports)]
 #[path = "../src/canvas.rs"]
 mod canvas;
-#[path = "../src/decode_ui.rs"]
+#[path = "../src/ui/decode.rs"]
 #[allow(dead_code, unused_imports)]
 mod decode_ui;
 use eframe::egui;

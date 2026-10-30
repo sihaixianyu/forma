@@ -1,3 +1,10 @@
+#[cfg(target_arch = "wasm32")]
+#[path = "worker/tasks.rs"]
+pub(crate) mod web_tasks;
+#[cfg(target_arch = "wasm32")]
+#[path = "worker/browser.rs"]
+pub(crate) mod web_worker;
+
 use eframe::egui;
 use std::sync::mpsc;
 #[cfg(not(target_arch = "wasm32"))]

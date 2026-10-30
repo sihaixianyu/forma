@@ -1,0 +1,43 @@
+{
+  "name": "JSON Lens",
+  "description": "A Rust JSON editor for desktop and browser. Explore JSON as a graph, or paste two documents for an automatic, aligned comparison.",
+  "links": {
+    "web_app": "https://sihaixianyu.github.io/json-lens/",
+    "repository": "https://github.com/sihaixianyu/json-lens",
+    "desktop_downloads": "https://github.com/sihaixianyu/json-lens/releases"
+  },
+  "features": [
+    "Graph and source navigation with an initial graph overview",
+    "Automatic comparison with aligned rows and linked scrolling",
+    "Preserved object key order and arbitrary-precision numbers",
+    "Wrapped editor lines and active-line highlighting",
+    "Base64, URL, Hex and nested JSON previews on hover",
+    "JSON and CSV import; browser files stay local"
+  ],
+  "controls": {
+    "sort": "Click to cycle: original → ascending → descending → original",
+    "graph": "Drag to pan; double-click a card to fold or unfold its branch",
+    "theme": "Follows the system theme; click the lamp to switch light or dark",
+    "path": "~ is the root; hover a truncated bottom path to see it in full",
+    "json_status": "Each comparison input has its own status in the bottom bar"
+  },
+  "shortcuts": {
+    "open_file": "Ctrl/Cmd + O",
+    "format_active_editor": "Ctrl/Cmd + S",
+    "undo": "Ctrl/Cmd + Z",
+    "redo": "Ctrl/Cmd + Shift + Z or Ctrl/Cmd + Y",
+    "find": "Ctrl/Cmd + F",
+    "jump_to_error": "Ctrl/Cmd + Shift + E",
+    "zoom_graph": "Ctrl/Cmd + wheel",
+    "indent": "Tab inserts two spaces"
+  },
+  "run": {
+    "desktop": "cargo run --release --locked",
+    "browser": [
+      "rustup target add wasm32-unknown-unknown",
+      "trunk serve --open"
+    ],
+    "local_url": "http://127.0.0.1:8080",
+    "web_release": "trunk build --release"
+  }
+}

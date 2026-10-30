@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,8 +22,9 @@ def licenses(destination):
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "LICENSE", destination / "LICENSE")
     shutil.copy2(ROOT / "assets/fonts/OFL.txt", destination / "FONT-LICENSE.txt")
+    shutil.copy2(ROOT / "assets/fonts/JetBrainsMono-OFL.txt", destination / "JETBRAINS-LICENSE.txt")
     shutil.copy2(ROOT / "assets/fonts/Inter-OFL.txt", destination / "INTER-LICENSE.txt")
-    shutil.copy2(ROOT / "assets/fonts/Bungee-OFL.txt", destination / "BUNGEE-LICENSE.txt")
+    shutil.copy2(ROOT / "assets/fonts/PixelifySans-OFL.txt", destination / "PIXELIFY-LICENSE.txt")
 
 
 def macos(binary, version, arch, output, stage):
@@ -150,11 +152,14 @@ def main():
         parser.error("Linux and Windows packages currently support x86_64")
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
-    # Never remove an existing directory supplied by the caller.
-    stage = args.stage.resolve() / f"{args.platform}-{args.arch}-{args.version}"
-    stage.mkdir(parents=True, exist_ok=False)
+    stage_root = args.stage.resolve()
+    stage_root.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
-    globals()[args.platform](binary, args.version, args.arch, output, stage)
+    # Isolate each run from cached stages and clean up only its own directory.
+    with tempfile.TemporaryDirectory(
+        prefix=f"{args.platform}-{args.arch}-{args.version}-", dir=stage_root
+    ) as directory:
+        globals()[args.platform](binary, args.version, args.arch, output, Path(directory))
 
 
 if __name__ == "__main__":

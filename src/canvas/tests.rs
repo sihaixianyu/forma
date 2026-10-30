@@ -9,8 +9,8 @@ fn frame(
     pointer: &mut String,
     time: f64,
     events: Vec<egui::Event>,
-) {
-    let _ = ctx.run(
+) -> egui::FullOutput {
+    ctx.run(
         egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100.0, 800.0))),
             time: Some(time),
@@ -22,7 +22,7 @@ fn frame(
                 canvas.show(ui, graph, false, pointer);
             });
         },
-    );
+    )
 }
 
 fn button(pos: Pos2, pressed: bool) -> egui::Event {
@@ -35,13 +35,39 @@ fn button(pos: Pos2, pressed: bool) -> egui::Event {
 }
 
 #[test]
-fn clicking_and_dragging_cards_updates_selection_and_position() {
+fn initial_document_fits_the_whole_graph_instead_of_focusing_the_root() {
+    let ctx = egui::Context::default();
+    let mut value = json!({"leaf": true});
+    for _ in 0..64 {
+        value = json!({"child": value});
+    }
+    let graph = build_graph(&value);
+    let mut canvas = Canvas::default();
+    canvas.reconcile(&Graph::default(), &graph);
+    let mut pointer = String::new();
+    frame(&ctx, &mut canvas, &graph, &mut pointer, 0.0, vec![]);
+    assert!(
+        canvas.zoom < 0.08,
+        "deep graphs must fit below the manual zoom limit"
+    );
+    for index in 0..graph.nodes.len() {
+        let node = canvas.node_rect(&graph, canvas.last_rect, index);
+        assert!(
+            canvas.last_rect.contains_rect(node),
+            "node {index} must be visible initially"
+        );
+    }
+}
+
+#[test]
+fn clicking_selects_cards_and_dragging_does_not_move_them() {
     let ctx = egui::Context::default();
     let graph = build_graph(&json!({"child":{"name":"example"}}));
     let mut canvas = Canvas::default();
     let mut pointer = String::new();
     frame(&ctx, &mut canvas, &graph, &mut pointer, 0.0, vec![]);
     let node = &graph.nodes[1];
+    let original = canvas.node_rect(&graph, canvas.last_rect, 1);
     let pos = canvas.last_rect.min
         + canvas.pan
         + (Vec2::new(node.x, node.y) + Vec2::new(120.0, 20.0)) * canvas.zoom;
@@ -87,8 +113,41 @@ fn clicking_and_dragging_cards_updates_selection_and_position() {
         1.2,
         vec![button(moved, false)],
     );
-    assert!(canvas.positions[&1].x > node.x);
-    assert!(canvas.positions[&1].y > node.y);
+    assert_eq!(canvas.node_rect(&graph, canvas.last_rect, 1), original);
+}
+
+#[test]
+fn clicking_an_edge_moves_to_the_next_or_previous_node() {
+    let ctx = egui::Context::default();
+    let graph = build_graph(&json!({"child":{"name":"example"}}));
+    let mut canvas = Canvas::default();
+    let mut pointer = String::new();
+    frame(&ctx, &mut canvas, &graph, &mut pointer, 0.0, vec![]);
+    let child = graph.container_for("/child").unwrap();
+    let edge = canvas
+        .edge_curve(&graph, canvas.last_rect, child)
+        .unwrap()
+        .sample(0.5);
+
+    for (time, expected) in [(0.1, "/child"), (0.3, "")] {
+        frame(
+            &ctx,
+            &mut canvas,
+            &graph,
+            &mut pointer,
+            time,
+            vec![egui::Event::PointerMoved(edge), button(edge, true)],
+        );
+        frame(
+            &ctx,
+            &mut canvas,
+            &graph,
+            &mut pointer,
+            time + 0.1,
+            vec![button(edge, false)],
+        );
+        assert_eq!(pointer, expected);
+    }
 }
 
 #[test]
@@ -140,18 +199,41 @@ fn clicking_a_value_selects_its_exact_pointer() {
 }
 
 #[test]
+fn selected_bottom_row_stays_beneath_the_node_outline() {
+    let ctx = egui::Context::default();
+    let graph = build_graph(&json!({"first": 1, "last": 2}));
+    let mut canvas = Canvas::default();
+    let mut pointer = "/last".to_owned();
+    let output = frame(&ctx, &mut canvas, &graph, &mut pointer, 0.0, vec![]);
+    let highlight = Color32::from_rgb(238, 235, 248);
+    let accent = Color32::from_rgb(128, 104, 199);
+    let highlight_index = output
+        .shapes
+        .iter()
+        .position(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == highlight))
+        .expect("selected row highlight");
+    let outline_index = output
+        .shapes
+        .iter()
+        .rposition(|shape| {
+            matches!(&shape.shape, egui::Shape::Rect(rect)
+                if rect.stroke.color == accent && (rect.stroke.width - 2.0).abs() < 0.01)
+        })
+        .expect("selected node outline");
+    assert!(outline_index > highlight_index);
+}
+
+#[test]
 fn document_updates_preserve_viewport_and_matching_card_state() {
     let old = build_graph(&json!({"child":{"name":"old"}}));
     let new = build_graph(&json!({"other":{}, "child":{"name":"new"}}));
     let mut canvas = Canvas::default();
     let index = old.container_for("/child").unwrap();
-    canvas.positions.insert(index, Vec2::new(400.0, 80.0));
     canvas.collapsed.insert(index);
     canvas.pan = Vec2::new(100.0, 200.0);
     canvas.zoom = 0.9;
     canvas.reconcile(&old, &new);
     let index = new.container_for("/child").unwrap();
-    assert_eq!(canvas.positions[&index], Vec2::new(400.0, 80.0));
     assert!(canvas.collapsed.contains(&index));
     assert_eq!(canvas.pan, Vec2::new(100.0, 200.0));
     assert_eq!(canvas.zoom, 0.9);
@@ -414,7 +496,9 @@ fn repeated_extreme_wheel_pan_cannot_leave_the_finite_graph_board() {
             previous = Some(canvas.pan);
         }
     }
-    canvas.reset_layout();
+    canvas.fit = true;
+    canvas.collapsed.clear();
+    canvas.geometry_dirty = true;
     frame(&ctx, &mut canvas, &graph, &mut pointer, 1.0, vec![]);
     let pan = canvas.pan;
     frame(
