@@ -1,8 +1,28 @@
-use super::*;
-
+#[cfg(all(not(target_arch = "wasm32"), feature = "bench-ui"))]
+pub(crate) mod benchmark;
 pub(crate) mod find;
 pub(crate) mod jobs;
 mod lifecycle;
+mod state;
+
+use crate::ui::feedback;
+use crate::{canvas, ui, worker};
+use eframe::egui;
+use forma::{
+    Difference, Document, EDIT_LIMIT, Format, PREVIEW_LIMIT, compare, csv_to_json, format_document,
+    preview, process,
+};
+use jobs::*;
+#[cfg(not(target_arch = "wasm32"))]
+use serde_json::Value;
+pub(crate) use state::{App, SortState, View};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
+use std::{
+    sync::{Arc, mpsc},
+    time::Duration,
+};
+use web_time::Instant;
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -181,13 +201,17 @@ impl App {
         }
         ctx.set_theme(self.theme_preference);
     }
-    pub(crate) fn clear_comparison(&mut self) {
+    pub(crate) fn reset_comparison_results(&mut self) {
         self.differences.clear();
         self.compare_alignment = None;
         self.comparison_done = false;
         self.compare_left_range = None;
         self.compare_right_range = None;
         self.compare_jump = false;
+    }
+
+    pub(crate) fn clear_comparison(&mut self) {
+        self.reset_comparison_results();
         self.compare_due = (self.view == View::Compare && !self.compare_text.trim().is_empty())
             .then(|| Instant::now() + Duration::from_millis(300));
     }

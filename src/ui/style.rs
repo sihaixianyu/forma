@@ -71,48 +71,69 @@ pub fn install_fonts(ctx: &egui::Context) {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Palette {
-    pub(super) canvas: Color32,
-    pub(super) surface: Color32,
-    pub(super) subtle: Color32,
-    pub(super) border: Color32,
-    pub(super) text: Color32,
-    pub(super) muted: Color32,
-    pub(super) accent: Color32,
-    pub(super) tint: Color32,
-    pub(super) green: Color32,
-    pub(super) amber: Color32,
-    pub(super) red: Color32,
+pub(crate) struct Palette {
+    pub(crate) canvas: Color32,
+    pub(crate) surface: Color32,
+    pub(crate) subtle: Color32,
+    pub(crate) border: Color32,
+    pub(crate) text: Color32,
+    pub(crate) editor_text: Color32,
+    pub(crate) muted: Color32,
+    pub(crate) accent: Color32,
+    pub(crate) tint: Color32,
+    pub(crate) selected: Color32,
+    pub(crate) green: Color32,
+    pub(crate) string: Color32,
+    pub(crate) amber: Color32,
+    pub(crate) number: Color32,
+    pub(crate) red: Color32,
+    pub(crate) property: Color32,
+    pub(crate) search_match: Color32,
+    pub(crate) search_active: Color32,
 }
 
-pub(super) fn palette(dark: bool) -> Palette {
+pub(crate) fn palette(dark: bool) -> Palette {
     if dark {
         Palette {
-            canvas: Color32::from_rgb(19, 21, 29),
-            surface: Color32::from_rgb(26, 29, 39),
-            subtle: Color32::from_rgb(33, 37, 49),
-            border: Color32::from_rgb(47, 52, 68),
-            text: Color32::from_rgb(222, 226, 237),
-            muted: Color32::from_rgb(143, 153, 174),
-            accent: Color32::from_rgb(167, 151, 255),
-            tint: Color32::from_rgb(48, 40, 77),
-            green: Color32::from_rgb(118, 209, 172),
-            amber: Color32::from_rgb(231, 181, 113),
-            red: Color32::from_rgb(246, 143, 157),
+            canvas: Color32::from_rgb(40, 44, 51),
+            surface: Color32::from_rgb(47, 52, 62),
+            subtle: Color32::from_rgb(46, 52, 62),
+            border: Color32::from_rgb(70, 75, 87),
+            text: Color32::from_rgb(220, 224, 229),
+            editor_text: Color32::from_rgb(172, 178, 190),
+            muted: Color32::from_rgb(169, 175, 188),
+            accent: Color32::from_rgb(116, 173, 232),
+            tint: Color32::from_rgb(54, 60, 70),
+            selected: Color32::from_rgb(69, 74, 86),
+            green: Color32::from_rgb(161, 193, 129),
+            string: Color32::from_rgb(161, 193, 129),
+            amber: Color32::from_rgb(222, 193, 132),
+            number: Color32::from_rgb(191, 149, 106),
+            red: Color32::from_rgb(208, 114, 119),
+            property: Color32::from_rgb(208, 114, 119),
+            search_match: Color32::from_rgba_unmultiplied(116, 173, 232, 102),
+            search_active: Color32::from_rgba_unmultiplied(232, 175, 116, 102),
         }
     } else {
         Palette {
-            canvas: Color32::from_rgb(244, 245, 249),
-            surface: Color32::from_rgb(247, 248, 252),
-            subtle: Color32::from_rgb(237, 240, 246),
-            border: Color32::from_rgb(219, 224, 234),
-            text: Color32::from_rgb(48, 55, 73),
-            muted: Color32::from_rgb(121, 132, 151),
-            accent: Color32::from_rgb(128, 104, 199),
-            tint: Color32::from_rgb(238, 235, 248),
-            green: Color32::from_rgb(38, 133, 103),
-            amber: Color32::from_rgb(167, 112, 41),
-            red: Color32::from_rgb(195, 66, 92),
+            canvas: Color32::from_rgb(250, 250, 250),
+            surface: Color32::from_rgb(235, 235, 236),
+            subtle: Color32::from_rgb(235, 235, 236),
+            border: Color32::from_rgb(201, 201, 202),
+            text: Color32::from_rgb(36, 37, 41),
+            editor_text: Color32::from_rgb(36, 37, 41),
+            muted: Color32::from_rgb(88, 88, 90),
+            accent: Color32::from_rgb(92, 120, 226),
+            tint: Color32::from_rgb(223, 223, 224),
+            selected: Color32::from_rgb(202, 202, 202),
+            green: Color32::from_rgb(102, 159, 89),
+            string: Color32::from_rgb(100, 159, 87),
+            amber: Color32::from_rgb(164, 136, 25),
+            number: Color32::from_rgb(173, 110, 37),
+            red: Color32::from_rgb(211, 97, 81),
+            property: Color32::from_rgb(211, 96, 79),
+            search_match: Color32::from_rgba_unmultiplied(92, 121, 226, 102),
+            search_active: Color32::from_rgba_unmultiplied(208, 169, 35, 102),
         }
     }
 }
@@ -157,16 +178,14 @@ pub fn configure(ctx: &egui::Context, dark: bool) {
     style.visuals.window_fill = p.surface;
     style.visuals.extreme_bg_color = p.subtle;
     style.visuals.faint_bg_color = p.subtle;
-    style.visuals.selection.bg_fill = p.tint;
-    style.visuals.selection.stroke = Stroke::new(1.0_f32, p.accent);
-    style.visuals.text_cursor.stroke = Stroke::new(
-        2.0_f32,
-        if dark {
-            Color32::from_rgb(94, 211, 255)
-        } else {
-            p.text
-        },
-    );
+    style.visuals.selection.bg_fill = if dark {
+        Color32::from_rgb(58, 78, 108)
+    } else {
+        Color32::from_rgb(201, 218, 248)
+    };
+    // egui also uses this stroke color for selected text.
+    style.visuals.selection.stroke = Stroke::new(1.0_f32, p.text);
+    style.visuals.text_cursor.stroke = Stroke::new(2.0_f32, p.accent);
     style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, p.border);
     style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, p.muted);
     for widget in [
@@ -211,15 +230,7 @@ pub(super) fn action_button_with_radius(
     let response = ui
         .push_id(text, |ui| {
             ui.scope(|ui| {
-                let base = if primary {
-                    if ui.visuals().dark_mode {
-                        Color32::from_rgb(123, 98, 222)
-                    } else {
-                        p.accent
-                    }
-                } else {
-                    p.subtle
-                };
+                let base = if primary { p.accent } else { p.subtle };
                 let hover = if primary {
                     base.lerp_to_gamma(Color32::WHITE, 0.14)
                 } else {
@@ -335,7 +346,26 @@ pub(super) fn segmented_button_with_fill(
     .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-pub(super) fn sort_button(ui: &mut egui::Ui, p: Palette, state: SortState) -> egui::Response {
+pub(super) fn sort_button(
+    ui: &mut egui::Ui,
+    p: Palette,
+    state: SortState,
+    compact: bool,
+) -> egui::Response {
+    if compact {
+        let icon = match state {
+            SortState::Original => "\u{f0dc}",
+            SortState::Ascending => "\u{f0de}",
+            SortState::Descending => "\u{f0dd}",
+        };
+        return segmented_button(
+            ui,
+            icon,
+            p,
+            state != SortState::Original,
+            Vec2::new(28.0, 24.0),
+        );
+    }
     let label = "\u{2003}  Sort";
     let label_width = ui
         .painter()
@@ -367,8 +397,11 @@ pub(super) fn sort_button(ui: &mut egui::Ui, p: Palette, state: SortState) -> eg
 
 pub(super) fn segment_divider(ui: &mut egui::Ui, p: Palette, height: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0, height), egui::Sense::hover());
-    ui.painter()
-        .vline(rect.center().x, rect.y_range(), Stroke::new(1.0, p.border));
+    ui.painter().vline(
+        rect.center().x,
+        rect.y_range(),
+        Stroke::new(1.0_f32, p.border),
+    );
 }
 
 pub(super) fn button(ui: &mut egui::Ui, text: &str, p: Palette) -> egui::Response {
@@ -416,7 +449,7 @@ pub(super) fn app_logo(ui: &mut egui::Ui, p: Palette, size: f32) {
                     curve.map(|(x, y)| point(if mirrored { 128.0 - x } else { x }, y)),
                     false,
                     egui::Color32::TRANSPARENT,
-                    egui::Stroke::new(1.5, p.accent),
+                    egui::Stroke::new(1.5_f32, p.accent),
                 ));
         }
     }

@@ -44,10 +44,10 @@ impl App {
             return;
         };
         let color = match feedback.kind {
-            crate::feedback::Kind::Working => p.accent,
-            crate::feedback::Kind::Success => p.green,
-            crate::feedback::Kind::Info => p.accent,
-            crate::feedback::Kind::Error => p.red,
+            Kind::Working => p.accent,
+            Kind::Success => p.green,
+            Kind::Info => p.accent,
+            Kind::Error => p.red,
         };
         let mut dismiss = false;
         egui::Area::new(egui::Id::new("operation_feedback"))
@@ -62,7 +62,7 @@ impl App {
                     .show(ui, |ui| {
                         ui.set_max_width(380.0);
                         ui.horizontal_top(|ui| {
-                            if feedback.kind == crate::feedback::Kind::Working {
+                            if feedback.kind == Kind::Working {
                                 ui.spinner();
                             } else {
                                 let (rect, _) =
@@ -152,7 +152,7 @@ impl App {
                 });
             });
         if copied {
-            self.notify(crate::feedback::Kind::Success, "JSON copied to clipboard");
+            self.notify(Kind::Success, "JSON copied to clipboard");
         }
         if save {
             let dialog = self.edit_dialog.as_ref().unwrap();

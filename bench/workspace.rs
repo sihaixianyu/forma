@@ -1,10 +1,3 @@
-#[allow(dead_code, unused_imports)]
-#[path = "../src/canvas.rs"]
-mod canvas;
-#[path = "../src/ui/decode.rs"]
-#[allow(dead_code, unused_imports)]
-mod decode_ui;
-use eframe::egui;
 use forma::{Format, format_document, graph::build_graph, process, search::find_tree};
 use std::{hint::black_box, sync::Arc, time::Instant};
 
@@ -51,30 +44,6 @@ fn main() {
             black_box(&graph);
         } else {
             black_box(build_graph(&formatted.value));
-        }
-    });
-    let ctx = egui::Context::default();
-    let mut view = canvas::Canvas::default();
-    let mut pointer = "/4000/name".to_owned();
-    let mut time = 0.0;
-    measure("10 static canvas frames", || {
-        for _ in 0..10 {
-            time += 1.0 / 60.0;
-            black_box(ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(1000.0, 700.0),
-                    )),
-                    time: Some(time),
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        view.show(ui, &graph, false, &mut pointer);
-                    });
-                },
-            ));
         }
     });
 }

@@ -18,7 +18,8 @@ toolbar to switch between a soft off-white theme and a dark theme.
 
 The compact top bar contains the logo, title and GitHub link on the left,
 an animated Graph / Compare selector aligned with the editor divider, and
-Sort, Expand, Minify and Format buttons with small icons on the right.
+Sort, Expand, Minify and Format buttons with small icons on the right. Font-size
+and line-height inputs sit between Format and the theme button and update both editors.
 Each pane has a fixed bottom bar with its path and JSON status. Paths start
 with `~` for the root; hover a truncated path to see it in full. In Compare
 mode, each status reports the validity of its own input independently.

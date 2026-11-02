@@ -360,7 +360,7 @@ pub(super) fn error_shortcut() -> egui::KeyboardShortcut {
 pub(super) fn reveal_error(
     ui: &mut egui::Ui,
     output: &mut egui::text_edit::TextEditOutput,
-    error: &crate::jobs::SyntaxError,
+    error: &crate::app::jobs::SyntaxError,
     base: usize,
 ) {
     let Some(offset) = error.offset.and_then(|offset| offset.checked_sub(base)) else {

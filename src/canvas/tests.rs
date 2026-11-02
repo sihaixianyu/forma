@@ -205,8 +205,8 @@ fn selected_bottom_row_stays_beneath_the_node_outline() {
     let mut canvas = Canvas::default();
     let mut pointer = "/last".to_owned();
     let output = frame(&ctx, &mut canvas, &graph, &mut pointer, 0.0, vec![]);
-    let highlight = Color32::from_rgb(238, 235, 248);
-    let accent = Color32::from_rgb(128, 104, 199);
+    let highlight = crate::ui::style::palette(false).selected;
+    let accent = crate::ui::style::palette(false).accent;
     let highlight_index = output
         .shapes
         .iter()

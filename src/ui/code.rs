@@ -1,8 +1,93 @@
 use super::*;
 
-pub(super) const EDITOR_FONT_SIZE: f32 = 14.0;
-pub(super) const EDITOR_LINE_HEIGHT: f32 = 17.0;
+pub(super) const EDITOR_FONT_SIZE: f32 = 13.0;
+pub(super) const EDITOR_LINE_HEIGHT: f32 = 20.0;
 
+// epaint accumulates unwrapped paragraph x coordinates as f32 before wrapping.
+// Millions of glyphs eventually stop advancing and collapse into one huge row.
+fn layout_bounded_job(ui: &egui::Ui, mut job: egui::text::LayoutJob) -> Arc<egui::Galley> {
+    const CHUNK_BYTES: usize = 16 * 1024;
+    if !job.text.split('\n').any(|line| line.len() > CHUNK_BYTES) {
+        return ui.fonts_mut(|fonts| fonts.layout_job(job));
+    }
+    let text = std::mem::take(&mut job.text);
+    let sections = std::mem::take(&mut job.sections);
+    let template = job.clone();
+    job.text = text;
+    job.sections = sections;
+    let job = Arc::new(job);
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    for line in job.text.split('\n') {
+        let end = start + line.len();
+        let mut chunk_start = start;
+        loop {
+            let mut chunk_end = (chunk_start + CHUNK_BYTES).min(end);
+            while !job.text.is_char_boundary(chunk_end) {
+                chunk_end -= 1;
+            }
+            let mut chunk = template.clone();
+            chunk.text = job.text[chunk_start..chunk_end].into();
+            let first = job
+                .sections
+                .partition_point(|section| section.byte_range.end <= chunk_start);
+            for section in job.sections.iter().skip(first) {
+                if section.byte_range.start >= chunk_end {
+                    break;
+                }
+                let mut section = section.clone();
+                section.byte_range = section.byte_range.start.max(chunk_start) - chunk_start
+                    ..section.byte_range.end.min(chunk_end) - chunk_start;
+                chunk.sections.push(section);
+            }
+            if chunk.sections.is_empty() {
+                let mut section = job.sections[0].clone();
+                section.byte_range = 0..0;
+                chunk.sections.push(section);
+            }
+            let galley = ui.fonts_mut(|fonts| fonts.layout_job(chunk));
+            chunks.push((galley, chunk_end == end && end < job.text.len()));
+            if chunk_end == end {
+                break;
+            }
+            chunk_start = chunk_end;
+        }
+        start = end + 1;
+    }
+    let galleys: Vec<_> = chunks.iter().map(|(galley, _)| galley.clone()).collect();
+    let mut result = egui::Galley::concat(job, &galleys, ui.ctx().pixels_per_point());
+    let mut index = 0;
+    for (galley, newline) in chunks {
+        index += galley.rows.len();
+        // Chunk boundaries are visual wraps, never inserted source newlines.
+        Arc::make_mut(&mut result.rows[index - 1].row).ends_with_newline = newline;
+    }
+    Arc::new(result)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EditorTypography {
+    pub font_size: f32,
+    pub line_height: f32,
+}
+
+impl Default for EditorTypography {
+    fn default() -> Self {
+        Self {
+            font_size: EDITOR_FONT_SIZE,
+            line_height: EDITOR_LINE_HEIGHT,
+        }
+    }
+}
+
+impl EditorTypography {
+    pub(super) fn clamp(&mut self) {
+        self.font_size = self.font_size.clamp(8.0, 32.0);
+        self.line_height = self.line_height.clamp(self.font_size, 48.0);
+    }
+}
+
+#[cfg(test)]
 pub(super) fn aligned_wrapped_galley(
     ui: &egui::Ui,
     galley: Arc<egui::Galley>,
@@ -10,6 +95,26 @@ pub(super) fn aligned_wrapped_galley(
     left: bool,
     other: &str,
     width: f32,
+) -> Arc<egui::Galley> {
+    aligned_wrapped_galley_with_typography(
+        ui,
+        galley,
+        alignment,
+        left,
+        other,
+        width,
+        EditorTypography::default(),
+    )
+}
+
+fn aligned_wrapped_galley_with_typography(
+    ui: &egui::Ui,
+    galley: Arc<egui::Galley>,
+    alignment: Option<&forma::alignment::Alignment>,
+    left: bool,
+    other: &str,
+    width: f32,
+    typography: EditorTypography,
 ) -> Arc<egui::Galley> {
     if !width.is_finite() {
         return aligned_galley(ui, galley, alignment, left);
@@ -30,12 +135,12 @@ pub(super) fn aligned_wrapped_galley(
     }
     let mut job = egui::text::LayoutJob::simple(
         other.into(),
-        FontId::monospace(EDITOR_FONT_SIZE),
+        FontId::monospace(typography.font_size),
         Color32::WHITE,
         width,
     );
     if let Some(section) = job.sections.first_mut() {
-        section.format.line_height = Some(EDITOR_LINE_HEIGHT);
+        section.format.line_height = Some(typography.line_height);
     }
     job.wrap.break_anywhere = galley.job.wrap.break_anywhere;
     let opposite = ui.fonts_mut(|fonts| fonts.layout_job(job));
@@ -127,6 +232,7 @@ pub(super) fn aligned_galley(
 pub struct CodeCache {
     dark: bool,
     pixels_per_point: f32,
+    typography: EditorTypography,
     job: Option<egui::text::LayoutJob>,
     galley: Option<Arc<egui::Galley>>,
     font_epoch: Option<Arc<egui::Galley>>,
@@ -220,16 +326,27 @@ impl CodeCache {
                     egui::vec2((right - x).max(3.0), row.size.y),
                 );
                 let active = match_index == selected;
-                let color = if active { p.amber } else { p.accent };
-                painter.rect_filled(
-                    rect,
-                    2,
-                    color.gamma_multiply(if active { 0.23 } else { 0.10 }),
-                );
-                painter.line_segment(
-                    [rect.left_bottom(), rect.right_bottom()],
-                    Stroke::new(if active { 1.5_f32 } else { 1.0_f32 }, color),
-                );
+                let color = if active {
+                    p.search_active
+                } else {
+                    p.search_match
+                };
+                if active {
+                    let active_rect = rect.expand2(egui::vec2(1.5, 0.0));
+                    painter.rect(
+                        active_rect,
+                        2,
+                        color,
+                        Stroke::new(1.5_f32, p.search_active.to_opaque()),
+                        egui::StrokeKind::Inside,
+                    );
+                } else {
+                    painter.rect_filled(rect, 2, color);
+                    painter.line_segment(
+                        [rect.left_bottom(), rect.right_bottom()],
+                        Stroke::new(1.0_f32, p.accent),
+                    );
+                }
             }
         }
     }
@@ -262,8 +379,15 @@ impl CodeCache {
         {
             return cached.result.clone();
         }
-        let result =
-            aligned_wrapped_galley(ui, galley.clone(), Some(alignment), left, other, width);
+        let result = aligned_wrapped_galley_with_typography(
+            ui,
+            galley.clone(),
+            Some(alignment),
+            left,
+            other,
+            width,
+            self.typography,
+        );
         self.aligned = Some(AlignedLayout {
             base: galley,
             alignment: alignment.clone(),
@@ -272,6 +396,7 @@ impl CodeCache {
         result
     }
 
+    #[cfg(test)]
     pub(super) fn layout_width(
         &mut self,
         ui: &egui::Ui,
@@ -280,8 +405,20 @@ impl CodeCache {
         query: &str,
         width: f32,
     ) -> Arc<egui::Galley> {
+        self.layout_width_with_typography(ui, text, dark, query, width, EditorTypography::default())
+    }
+
+    pub(super) fn layout_width_with_typography(
+        &mut self,
+        ui: &egui::Ui,
+        text: &str,
+        dark: bool,
+        query: &str,
+        width: f32,
+        typography: EditorTypography,
+    ) -> Arc<egui::Galley> {
         let _stage = forma::diagnostics::Stage::slow("editor_layout", text.len(), 8.0);
-        self.layout_at(ui, text, dark, query, width)
+        self.layout_at(ui, text, dark, query, width, typography)
     }
     #[cfg(test)]
     pub(super) fn layout(
@@ -291,7 +428,14 @@ impl CodeCache {
         dark: bool,
         query: &str,
     ) -> Arc<egui::Galley> {
-        self.layout_at(ui, text, dark, query, f32::INFINITY)
+        self.layout_at(
+            ui,
+            text,
+            dark,
+            query,
+            f32::INFINITY,
+            EditorTypography::default(),
+        )
     }
     fn layout_at(
         &mut self,
@@ -300,6 +444,7 @@ impl CodeCache {
         dark: bool,
         _query: &str,
         width: f32,
+        typography: EditorTypography,
     ) -> Arc<egui::Galley> {
         // egui clears the entire galley cache when fonts or their atlas are recreated.
         // Resolve a tiny job each pass to detect that epoch without cloning/hashing
@@ -307,12 +452,13 @@ impl CodeCache {
         let epoch = ui.fonts_mut(|fonts| {
             fonts.layout_no_wrap(
                 " ".into(),
-                FontId::monospace(EDITOR_FONT_SIZE),
+                FontId::monospace(typography.font_size),
                 Color32::TRANSPARENT,
             )
         });
         if self.dark == dark
             && self.pixels_per_point == ui.ctx().pixels_per_point()
+            && self.typography == typography
             && let Some(job) = &self.job
             && job.text == text
             && job.wrap.max_width == width
@@ -325,7 +471,7 @@ impl CodeCache {
             {
                 return galley.clone();
             }
-            let galley = ui.fonts_mut(|fonts| fonts.layout_job(job.clone()));
+            let galley = layout_bounded_job(ui, job.clone());
             self.galley = Some(galley.clone());
             self.font_epoch = Some(epoch);
             return galley;
@@ -341,9 +487,9 @@ impl CodeCache {
                 "",
                 0.0,
                 egui::TextFormat {
-                    font_id: FontId::monospace(EDITOR_FONT_SIZE),
-                    line_height: Some(EDITOR_LINE_HEIGHT),
-                    color: p.text,
+                    font_id: FontId::monospace(typography.font_size),
+                    line_height: Some(typography.line_height),
+                    color: p.editor_text,
                     ..Default::default()
                 },
             );
@@ -367,9 +513,9 @@ impl CodeCache {
                     }
                     let next = text[index..].trim_start().as_bytes().first().copied();
                     if next == Some(b':') {
-                        p.accent
+                        p.property
                     } else {
-                        p.green
+                        p.string
                     }
                 }
                 b'-' | b'0'..=b'9' => {
@@ -379,18 +525,18 @@ impl CodeCache {
                     {
                         index += 1;
                     }
-                    p.amber
+                    p.number
                 }
                 b't' | b'f' | b'n' => {
                     index += 1;
                     while index < bytes.len() && bytes[index].is_ascii_alphabetic() {
                         index += 1;
                     }
-                    p.accent
+                    p.number
                 }
                 _ => {
                     index += text[index..].chars().next().unwrap().len_utf8();
-                    p.text
+                    p.editor_text
                 }
             };
             // Invalid Unicode escape sequences remain editable; never split a UTF-8 codepoint.
@@ -406,8 +552,8 @@ impl CodeCache {
                     leading_space: 0.0,
                     byte_range: start..index,
                     format: egui::TextFormat {
-                        font_id: FontId::monospace(EDITOR_FONT_SIZE),
-                        line_height: Some(EDITOR_LINE_HEIGHT),
+                        font_id: FontId::monospace(typography.font_size),
+                        line_height: Some(typography.line_height),
                         color,
                         ..Default::default()
                     },
@@ -415,9 +561,10 @@ impl CodeCache {
             }
         }
         job.wrap.max_width = width;
-        let galley = ui.fonts_mut(|fonts| fonts.layout_job(job.clone()));
+        let galley = layout_bounded_job(ui, job.clone());
         self.dark = dark;
         self.pixels_per_point = ui.ctx().pixels_per_point();
+        self.typography = typography;
         self.job = Some(job);
         self.galley = Some(galley.clone());
         self.font_epoch = Some(epoch);

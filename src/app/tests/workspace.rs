@@ -219,6 +219,65 @@ fn blank_space_at_the_bottom_of_a_tall_editor_remains_editable() {
 }
 
 #[test]
+fn pending_and_equal_comparisons_start_both_editors_without_a_header_gap() {
+    let mut app = ready_app();
+    let (sender, receiver) = mpsc::channel();
+    app.jobs = sender.into();
+    app.view = View::Compare;
+    app.compare_text = app.editor.clone();
+    app.start(
+        Job::Compare(app.full_text.clone(), Arc::new(app.compare_text.clone())),
+        false,
+    );
+    finish(&mut app, receiver.recv().unwrap());
+    assert!(app.comparison_done && app.differences.is_empty());
+
+    let ctx = egui::Context::default();
+    ui::install_fonts(&ctx);
+    ui::configure(&ctx, false);
+    for comparison_done in [false, true] {
+        app.comparison_done = comparison_done;
+        let mut output = None;
+        for frame in 0..3 {
+            output = Some(ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 800.0),
+                    )),
+                    time: Some(frame as f64 * 0.1),
+                    ..Default::default()
+                },
+                |ctx| app.workspace(ctx),
+            ));
+        }
+        let output = output.unwrap();
+        let editors: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == app.editor => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(editors.len(), 2);
+        assert!(
+            editors.iter().all(|editor| editor.pos.y < 45.0),
+            "pending/equal editors should start below the 36px app header: {:?}",
+            editors
+                .iter()
+                .map(|editor| editor.pos.y)
+                .collect::<Vec<_>>()
+        );
+        assert!(!output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text)
+                if text.galley.job.text == "Updating comparison…"
+                    || text.galley.job.text == "Both documents are equal")
+        }));
+    }
+}
+
+#[test]
 fn compare_rows_and_gutters_remain_aligned_when_scrolling_the_right_editor() {
     let mut app = ready_app();
     let (sender, receiver) = mpsc::channel();
@@ -305,6 +364,14 @@ fn compare_rows_and_gutters_remain_aligned_when_scrolling_the_right_editor() {
             app.compare_scroll
         );
         if frame == 0 {
+            let summary = format!("Difference 1 / {}", app.differences.len());
+            let headers: Vec<_> = text_shapes
+                .iter()
+                .filter(|text| text.galley.job.text == summary)
+                .collect();
+            assert_eq!(headers.len(), 2, "both compare panes need a diff header");
+            assert!(headers.iter().any(|text| text.pos.x < 640.0));
+            assert!(headers.iter().any(|text| text.pos.x >= 640.0));
             let numbers: Vec<_> = text_shapes
                 .iter()
                 .filter(|text| text.galley.job.text == "1")
@@ -490,4 +557,254 @@ fn two_find_presses_in_one_frame_toggle_twice() {
         |ctx| app.search_shortcuts(ctx),
     );
     assert!(!app.search.text.visible);
+}
+
+#[test]
+fn paths_collapse_only_when_the_full_text_exceeds_the_footer_width() {
+    let mut app = ready_app();
+    let ctx = egui::Context::default();
+    ui::install_fonts(&ctx);
+    ui::configure(&ctx, false);
+    for (pointer, width, expected) in [
+        ("/one/two", 1280.0, "~ > one > two"),
+        (
+            "/one/two/three/four/five/six",
+            1280.0,
+            "~ > one > two > three > four > five > six",
+        ),
+        (
+            "/alpha/bravo/charlie/delta/echo/foxtrot",
+            900.0,
+            "~ > alpha > ... > echo > foxtrot",
+        ),
+        (
+            "/alpha/bravo/charlie/delta/echo/foxtrot",
+            1600.0,
+            "~ > alpha > bravo > charlie > delta > echo > foxtrot",
+        ),
+        (
+            "/a~1b/very_long_middle_segment/other_long_middle_segment/c~0d/six",
+            900.0,
+            "~ > a/b > ... > c~d > six",
+        ),
+        (
+            "/a/very_long_middle_segment_that_does_not_fit/b/c",
+            900.0,
+            "~ > a > ... > b > c",
+        ),
+    ] {
+        app.pointer = pointer.into();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| app.workspace(ctx),
+        );
+        assert!(
+            output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.job.text == expected)),
+            "width={width}, expected={expected}"
+        );
+    }
+}
+
+#[test]
+fn large_comparison_scrollbar_drag_keeps_both_editors_visible_and_linked() {
+    let mut app = ready_app();
+    let text = format!(
+        "[\n{}\n]",
+        vec![r#"  {"id":123,"value":"中文 long wrapped value"}"#; 25_000].join(",\n")
+    );
+    app.editor = text.clone();
+    app.full_text = Arc::new(text.clone());
+    app.search_source = app.full_text.clone();
+    app.compare_text = text.clone();
+    app.compare_alignment = Some(Arc::new(forma::alignment::align(&text, &text)));
+    app.comparison_done = true;
+    app.editable = true;
+    app.view = View::Compare;
+    let ctx = egui::Context::default();
+    ui::install_fonts(&ctx);
+    ui::configure(&ctx, false);
+    let mut track = egui::Rect::ZERO;
+    for frame in 0..7 {
+        if frame == 1 {
+            app.compare_scroll = 250_000.0;
+        }
+        let pos = egui::pos2(track.center().x, track.bottom() - 20.0);
+        let events = match frame {
+            2 => vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            3 => vec![egui::Event::PointerMoved(egui::pos2(
+                pos.x,
+                track.top() + 20.0,
+            ))],
+            4 => vec![egui::Event::PointerButton {
+                pos: egui::pos2(pos.x, track.top() + 20.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            _ => vec![],
+        };
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                time: Some(frame as f64 / 60.0),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.workspace(ctx),
+        );
+        let editors: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text_shape) if text_shape.galley.job.text == text => {
+                    Some((shape.clip_rect, text_shape))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            editors.len(),
+            2,
+            "both editors must paint after a far scrollbar jump"
+        );
+        for (clip, shape) in &editors {
+            assert!(
+                !shape.galley.rows.is_empty(),
+                "the viewport must never be blank"
+            );
+            assert!(shape.galley.rows.len() < 40);
+            assert!(
+                shape
+                    .galley
+                    .mesh_bounds
+                    .translate(shape.pos.to_vec2())
+                    .intersects(*clip)
+            );
+        }
+        assert!(
+            (editors[0].1.pos.y - editors[1].1.pos.y).abs() < 1.0,
+            "frame={frame} left={} right={} offset={}",
+            editors[0].1.pos.y,
+            editors[1].1.pos.y,
+            app.compare_scroll
+        );
+        track = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect)
+                    if rect.rect.width() < 20.0
+                        && rect.rect.height() > 100.0
+                        && rect.rect.center().x < 640.0 =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("left scrollbar track must be visible");
+        if frame == 2 {
+            assert!(
+                app.compare_scroll > 400_000.0,
+                "track click must move the linked offset"
+            );
+        }
+        if frame >= 4 {
+            assert!(
+                app.compare_scroll < 50_000.0,
+                "drag must move both panes back towards the top"
+            );
+        }
+        let _ = ctx.tessellate(output.shapes, output.pixels_per_point);
+    }
+}
+
+#[test]
+fn continuous_scroll_in_either_compare_pane_uses_one_pass_and_keeps_rows_aligned() {
+    let mut app = ready_app();
+    let text = format!(
+        "[\n{}\n]",
+        vec![r#"  {"id":123,"value":"scrolling text"}"#; 20_000].join(",\n")
+    );
+    app.editor = text.clone();
+    app.full_text = Arc::new(text.clone());
+    app.search_source = app.full_text.clone();
+    app.compare_text = text.clone();
+    app.compare_alignment = Some(Arc::new(forma::alignment::align(&text, &text)));
+    app.comparison_done = true;
+    app.editable = true;
+    app.view = View::Compare;
+    let ctx = egui::Context::default();
+    ui::install_fonts(&ctx);
+    ui::configure(&ctx, false);
+    for frame in 0..42 {
+        let events = if frame < 2 {
+            vec![]
+        } else {
+            vec![
+                egui::Event::PointerMoved(egui::pos2(
+                    if frame < 22 { 300.0 } else { 900.0 },
+                    400.0,
+                )),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -120.0),
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                time: Some(frame as f64 / 60.0),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.workspace(ctx),
+        );
+        if frame >= 2 {
+            assert_eq!(
+                output.platform_output.num_completed_passes, 1,
+                "scrolling frame {frame} must not discard the whole UI"
+            );
+        }
+        let editors: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(shape) if shape.galley.job.text == text => Some(shape),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(editors.len(), 2);
+        assert_eq!(
+            editors[0].pos.y, editors[1].pos.y,
+            "linked paint must align in frame {frame}"
+        );
+        assert_eq!(editors[0].galley.rows, editors[1].galley.rows);
+        assert!(output.shapes.iter().all(|shape| !matches!(&shape.shape,
+            egui::Shape::Text(shape) if shape.galley.job.text.contains("egui PERF WARNING"))));
+        let _ = ctx.tessellate(output.shapes, output.pixels_per_point);
+    }
+    assert!(app.compare_scroll > 2000.0);
 }

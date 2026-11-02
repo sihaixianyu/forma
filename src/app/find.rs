@@ -22,8 +22,8 @@ enum RemoteRequest {
     Right(u64, Arc<String>, String),
     TextCached(u64, SourceRef, String),
     RightCached(u64, SourceRef, String),
-    Tree(u64, crate::web_tasks::DocRef, String),
-    Pointer(u64, crate::web_tasks::DocRef, String),
+    Tree(u64, crate::worker::web_tasks::DocRef, String),
+    Pointer(u64, crate::worker::web_tasks::DocRef, String),
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -129,12 +129,12 @@ impl crate::worker::Task<Result> for Request {
             }
             Self::Tree(id, doc, query) => RemoteRequest::Tree(
                 *id,
-                crate::web_tasks::DocRef::new(doc, force),
+                crate::worker::web_tasks::DocRef::new(doc, force),
                 query.clone(),
             ),
             Self::Pointer(id, doc, pointer) => RemoteRequest::Pointer(
                 *id,
-                crate::web_tasks::DocRef::new(doc, force),
+                crate::worker::web_tasks::DocRef::new(doc, force),
                 pointer.clone(),
             ),
         };

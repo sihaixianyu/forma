@@ -1,8 +1,6 @@
 #[cfg(target_arch = "wasm32")]
-#[path = "worker/tasks.rs"]
 pub(crate) mod web_tasks;
 #[cfg(target_arch = "wasm32")]
-#[path = "worker/browser.rs"]
 pub(crate) mod web_worker;
 
 use eframe::egui;
@@ -124,7 +122,7 @@ pub fn spawn<T: Task<R>, R: Send + 'static>(
     #[cfg(target_arch = "wasm32")]
     {
         let _ = process;
-        crate::web_worker::spawn(ctx, results, coalesce)
+        web_worker::spawn(ctx, results, coalesce)
     }
 }
 

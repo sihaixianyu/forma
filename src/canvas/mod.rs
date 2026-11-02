@@ -2,7 +2,8 @@ use eframe::egui::{self, Color32, FontId, Pos2, Rect, Stroke, Vec2};
 use forma::graph::{Graph, NODE_WIDTH};
 use std::collections::HashSet;
 
-#[path = "canvas/geometry.rs"]
+use crate::ui::style::palette;
+
 mod geometry;
 #[cfg(test)]
 use geometry::visible_edge;
@@ -81,31 +82,12 @@ impl Canvas {
             self.graph_id = graph_id;
             self.geometry_dirty = true;
         }
-        let accent = if dark {
-            Color32::from_rgb(135, 109, 234)
-        } else {
-            Color32::from_rgb(128, 104, 199)
-        };
-        let muted = if dark {
-            Color32::from_rgb(145, 154, 177)
-        } else {
-            Color32::from_rgb(121, 132, 151)
-        };
-        let text = if dark {
-            Color32::from_rgb(225, 229, 240)
-        } else {
-            Color32::from_rgb(48, 55, 73)
-        };
-        let border = if dark {
-            Color32::from_rgb(66, 72, 92)
-        } else {
-            Color32::from_rgb(219, 224, 234)
-        };
-        let surface = if dark {
-            Color32::from_rgb(30, 33, 45)
-        } else {
-            Color32::from_rgb(252, 253, 255)
-        };
+        let palette = palette(dark);
+        let accent = palette.accent;
+        let muted = palette.muted;
+        let text = palette.editor_text;
+        let border = palette.border;
+        let surface = palette.surface;
         if &self.last_pointer != pointer {
             self.focus = Some(pointer.clone());
             self.last_pointer = pointer.clone();
@@ -200,11 +182,7 @@ impl Canvas {
                 self.pan.x.rem_euclid(spacing),
                 self.pan.y.rem_euclid(spacing),
             );
-        let dot = if dark {
-            Color32::from_rgb(49, 54, 70)
-        } else {
-            Color32::from_rgb(220, 225, 236)
-        };
+        let dot = palette.tint;
         let mut x = origin.x;
         while x < rect.right() {
             let mut y = origin.y;
@@ -338,15 +316,7 @@ impl Canvas {
                 let row_rect =
                     Rect::from_min_max(at(8.0, y), at(NODE_WIDTH - 8.0, y + 24.0)).intersect(rect);
                 if row.pointer == *pointer {
-                    card_painter.rect_filled(
-                        row_rect,
-                        4,
-                        if dark {
-                            Color32::from_rgb(61, 48, 93)
-                        } else {
-                            Color32::from_rgb(238, 235, 248)
-                        },
-                    );
+                    card_painter.rect_filled(row_rect, 4, palette.selected);
                 }
                 if row_rect.is_positive() {
                     let response = ui.interact(
@@ -354,7 +324,7 @@ impl Canvas {
                         ui.id().with(("graph_row", index, row_index)),
                         egui::Sense::click(),
                     );
-                    crate::decode_ui::show(&response, row.string.as_deref());
+                    crate::ui::decode_ui::show(&response, row.string.as_deref());
                     if response.clicked() {
                         *pointer = row.pointer.clone();
                         self.last_pointer = pointer.clone();
@@ -379,9 +349,8 @@ impl Canvas {
                         muted,
                     );
                 let color = match row.kind {
-                    "string" => Color32::from_rgb(56, 161, 124),
-                    "number" => Color32::from_rgb(190, 138, 66),
-                    "boolean" => accent,
+                    "string" => palette.string,
+                    "number" | "boolean" => palette.number,
                     _ => text,
                 };
                 card_painter
@@ -507,5 +476,4 @@ impl Canvas {
 }
 
 #[cfg(test)]
-#[path = "canvas/tests.rs"]
 mod tests;

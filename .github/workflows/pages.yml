@@ -1,4 +1,4 @@
-name: Deploy WebAssembly
+name: Pages
 
 on:
   push:

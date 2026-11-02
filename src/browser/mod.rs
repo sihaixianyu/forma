@@ -92,7 +92,7 @@ pub fn start() {
             .start(
                 canvas,
                 eframe::WebOptions::default(),
-                Box::new(|cc| Ok(Box::new(crate::App::new(cc)))),
+                Box::new(|cc| Ok(Box::new(crate::app::App::new(cc)))),
             )
             .await
         {

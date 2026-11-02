@@ -187,6 +187,7 @@ fn editor_gutter_stays_outside_horizontal_scrolling() {
                             base: 0,
                             alignment: None,
                             syntax_error: None,
+                            font_size: EDITOR_FONT_SIZE,
                         },
                         |ui| {
                             let mut layouter =
@@ -281,6 +282,7 @@ fn code_editor_tab_undo_redo_and_caret_use_the_widget_input_path() {
                         ui,
                         "tab_test",
                         changed,
+                        EDITOR_LINE_HEIGHT,
                         egui::TextEdit::multiline(&mut text)
                             .id_salt("tab_test")
                             .font(egui::TextStyle::Monospace)
@@ -305,11 +307,11 @@ fn code_editor_tab_undo_redo_and_caret_use_the_widget_input_path() {
             assert!(output.shapes.iter().any(|shape| matches!(
                 &shape.shape,
                 egui::Shape::LineSegment { points, stroke }
-                if stroke.color == palette(false).text
+                if stroke.color == palette(false).accent
                         && (stroke.width - 2.0).abs() < 0.01
                         && (points[0].x - points[1].x).abs() < 0.01
                         && ((points[1].y - points[0].y).abs()
-                            - (EDITOR_FONT_SIZE + 2.0))
+                            - EDITOR_LINE_HEIGHT)
                             .abs()
                             < 0.01
             )));
@@ -353,6 +355,7 @@ fn selected_unicode_lines_indent_by_two_and_outdent_is_undoable() {
                         ui,
                         "block_test",
                         changed,
+                        EDITOR_LINE_HEIGHT,
                         egui::TextEdit::multiline(&mut text)
                             .id_salt("block_test")
                             .code_editor(),
@@ -393,11 +396,11 @@ fn code_layout_preserves_font_row_metrics_for_cursor_positions() {
                         font_height,
                     );
                     assert!(
-                        // egui expands the font-aligned caret by 1.5 points at each end.
-                        (cursor.height() - font_height - 3.0).abs() < 1.0,
-                        "cursor={} font={}",
+                        // egui expands the row-aligned caret by 1.5 points at each end.
+                        (cursor.height() - row.size.y - 3.0).abs() < 1.0,
+                        "cursor={} row={}",
                         cursor.height(),
-                        font_height
+                        row.size.y
                     );
                     offset += row.glyphs.len() + usize::from(row.ends_with_newline);
                 }

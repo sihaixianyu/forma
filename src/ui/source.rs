@@ -2,11 +2,72 @@ use super::*;
 
 impl App {
     pub(super) fn source_actions(&mut self, ui: &mut egui::Ui, p: Palette) {
+        let compact = ui.ctx().content_rect().width() < 1000.0;
         ui.add_enabled_ui(!self.busy || self.automatic_job, |ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.spacing_mut().interact_size = Vec2::new(0.0, 24.0);
             ui.spacing_mut().button_padding = Vec2::new(8.0, 0.0);
-            let sort = sort_button(ui, p, self.sort_state)
+            let format = if compact {
+                "\u{f036}"
+            } else {
+                "\u{f036}  Format"
+            };
+            if segmented_button(
+                ui,
+                format,
+                p,
+                false,
+                Vec2::new(if compact { 28.0 } else { 0.0 }, 24.0),
+            )
+            .on_hover_text("Format JSON · ⌘S / Ctrl+S")
+            .clicked()
+            {
+                self.reset_sort_state();
+                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
+                self.parse(Format::Pretty);
+            }
+            segment_divider(ui, p, 16.0);
+            let minify = if compact {
+                "\u{f066}"
+            } else {
+                "\u{f066}  Minify"
+            };
+            if segmented_button(
+                ui,
+                minify,
+                p,
+                false,
+                Vec2::new(if compact { 28.0 } else { 0.0 }, 24.0),
+            )
+            .on_hover_text("Minify JSON")
+            .clicked()
+            {
+                self.reset_sort_state();
+                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
+                self.parse(Format::Compact);
+            }
+            segment_divider(ui, p, 16.0);
+            let expand = if compact {
+                "\u{f065}"
+            } else {
+                "\u{f065}  Expand"
+            };
+            if segmented_button(
+                ui,
+                expand,
+                p,
+                false,
+                Vec2::new(if compact { 28.0 } else { 0.0 }, 24.0),
+            )
+            .on_hover_text("Expand JSON encoded in strings")
+            .clicked()
+            {
+                self.reset_sort_state();
+                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
+                self.parse(Format::Nested);
+            }
+            segment_divider(ui, p, 16.0);
+            let sort = sort_button(ui, p, self.sort_state, compact)
                 .on_hover_text("Click to cycle: original → ascending → descending → original");
             if sort.clicked() {
                 let state = self.sort_state.after_single_click();
@@ -14,30 +75,6 @@ impl App {
                     preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
                 }
                 self.apply_sort_state(state);
-            }
-            segment_divider(ui, p, 16.0);
-            if segmented_button(ui, "\u{f065}  Expand", p, false, Vec2::new(0.0, 24.0))
-                .on_hover_text("Expand JSON encoded in strings")
-                .clicked()
-            {
-                self.reset_sort_state();
-                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
-                self.parse(Format::Nested);
-            }
-            segment_divider(ui, p, 16.0);
-            if segmented_button(ui, "\u{f066}  Minify", p, false, Vec2::new(0.0, 24.0)).clicked() {
-                self.reset_sort_state();
-                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
-                self.parse(Format::Compact);
-            }
-            segment_divider(ui, p, 16.0);
-            if segmented_button(ui, "\u{f036}  Format", p, false, Vec2::new(0.0, 24.0))
-                .on_hover_text("Format JSON · ⌘S / Ctrl+S")
-                .clicked()
-            {
-                self.reset_sort_state();
-                preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
-                self.parse(Format::Pretty);
             }
         });
     }
@@ -62,6 +99,9 @@ impl App {
                 ui.set_min_height(height.max(100.0));
                 ui.set_min_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 0.0;
+                if self.view == View::Compare {
+                    self.comparison_header(ui, p, false);
+                }
                 self.text_search(ui, p);
                 if self.search.jump {
                     self.prepare_search_jump();
@@ -104,7 +144,6 @@ impl App {
                 }
                 self.source_header_height = ui.cursor().top() - header_top;
                 align_content(ui, header_top, self.header_height());
-                self.pane_content_top = ui.cursor().top();
                 let editor_height = ui.available_height().max(0.0);
                 let editable = self.editable && (!self.busy || self.automatic_job);
                 let alignment = if self.view == View::Compare && self.preview_start == 0 {
@@ -114,6 +153,7 @@ impl App {
                 };
                 let offset = (self.view == View::Compare).then_some(self.compare_scroll);
                 let syntax_error = self.syntax_error.clone();
+                let typography = self.editor_typography;
                 let scroll = editor_scroll(
                     ui,
                     EditorViewport {
@@ -127,8 +167,13 @@ impl App {
                         base: self.preview_start,
                         alignment: alignment.as_deref(),
                         syntax_error: syntax_error.as_ref(),
+                        font_size: typography.font_size,
                     },
                     |ui| {
+                        ui.style_mut().text_styles.insert(
+                            egui::TextStyle::Monospace,
+                            FontId::monospace(typography.font_size),
+                        );
                         let wrap_width = if self.view == View::Compare {
                             (ui.ctx().content_rect().width()
                                 * self.split_ratio.min(1.0 - self.split_ratio)
@@ -139,12 +184,13 @@ impl App {
                         };
                         let mut layouter =
                             |ui: &egui::Ui, text: &dyn egui::TextBuffer, _width: f32| {
-                                let galley = self.code.layout_width(
+                                let galley = self.code.layout_width_with_typography(
                                     ui,
                                     text.as_str(),
                                     self.dark,
                                     &self.search.text.query,
                                     wrap_width,
+                                    typography,
                                 );
                                 self.code.align(
                                     ui,
@@ -161,6 +207,7 @@ impl App {
                             ui,
                             "json_source",
                             indentation_changed,
+                            typography.line_height,
                             egui::TextEdit::multiline(&mut self.editor)
                                 .id(egui::Id::new("forma_source"))
                                 .font(egui::TextStyle::Monospace)
@@ -295,8 +342,11 @@ impl App {
                         output
                     },
                 );
-                if self.view == View::Compare {
+                if self.view == View::Compare
+                    && (scroll.state.offset.y - self.compare_scroll).abs() > 0.5
+                {
                     self.compare_scroll = scroll.state.offset.y;
+                    ui.ctx().request_repaint();
                 }
             });
     }

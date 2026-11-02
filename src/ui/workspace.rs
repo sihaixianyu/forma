@@ -109,9 +109,10 @@ impl App {
                             },
                         );
                     }
+                    self.typography_controls(ui, p);
                     egui::Frame::new()
                         .fill(p.subtle)
-                        .stroke(Stroke::new(1.0, p.border))
+                        .stroke(Stroke::new(1.0_f32, p.border))
                         .corner_radius(7)
                         .inner_margin(1)
                         .show(ui, |ui| self.source_actions(ui, p));
@@ -167,14 +168,25 @@ impl App {
                             .max_rect(split.0)
                             .layout(egui::Layout::top_down(egui::Align::Min)),
                     );
-                    self.source_panel(&mut left, p);
                     let mut right = ui.new_child(
                         egui::UiBuilder::new()
                             .id_salt("right_pane")
                             .max_rect(split.2)
                             .layout(egui::Layout::top_down(egui::Align::Min)),
                     );
-                    self.explorer(&mut right, p);
+                    let right_first = self.view == View::Compare
+                        && ui
+                            .input(|input| input.pointer.hover_pos())
+                            .map_or(self.active_right, |pos| split.2.contains(pos));
+                    // Resolve the pane receiving scroll input first, then draw its peer
+                    // with the same final offset in this frame.
+                    if right_first {
+                        self.explorer(&mut right, p);
+                        self.source_panel(&mut left, p);
+                    } else {
+                        self.source_panel(&mut left, p);
+                        self.explorer(&mut right, p);
+                    }
                 }
                 self.path_footer(ui, full_area, p);
             });
@@ -207,6 +219,50 @@ impl App {
         }
         self.edit_window(ctx, p);
         self.feedback_panel(ctx, p);
+    }
+
+    fn typography_controls(&mut self, ui: &mut egui::Ui, p: Palette) {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(108.0, 24.0), egui::Sense::hover());
+        let mut controls = ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt("editor_typography")
+                .max_rect(rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        controls.spacing_mut().item_spacing.x = 4.0;
+        controls.spacing_mut().button_padding = Vec2::new(4.0, 0.0);
+        controls.visuals_mut().override_text_color = Some(p.muted);
+        let font = controls
+            .push_id("font_size", |ui| {
+                ui.add_sized(
+                    [52.0, 24.0],
+                    egui::DragValue::new(&mut self.editor_typography.font_size)
+                        .prefix("A ")
+                        .range(8.0..=32.0)
+                        .speed(0.25)
+                        .max_decimals(1),
+                )
+            })
+            .inner
+            .on_hover_text("Editor font size · drag or type 8–32 px");
+        let line = controls
+            .push_id("line_height", |ui| {
+                ui.add_sized(
+                    [52.0, 24.0],
+                    egui::DragValue::new(&mut self.editor_typography.line_height)
+                        .prefix("↕ ")
+                        .range(10.0..=48.0)
+                        .speed(0.25)
+                        .max_decimals(1),
+                )
+            })
+            .inner
+            .on_hover_text("Editor line height · drag or type 10–48 px");
+        debug_assert!((font.rect.center().y - line.rect.center().y).abs() < f32::EPSILON);
+        if font.changed() || line.changed() {
+            self.editor_typography.clamp();
+            ui.ctx().request_discard("Editor typography changed");
+        }
     }
 }
 
@@ -326,12 +382,26 @@ impl App {
         );
         ui.horizontal(|ui| {
             ui.label(RichText::new("Path").size(12.0).color(p.muted));
-            let path = path.join(" > ");
+            let full_path = path.join(" > ");
+            let full_width = ui
+                .painter()
+                .layout_no_wrap(full_path.clone(), FontId::monospace(12.0), p.text)
+                .size()
+                .x;
+            let path = if path.len() > 4 && full_width > ui.available_width() {
+                format!(
+                    "{} > ... > {}",
+                    path[..2].join(" > "),
+                    path[path.len() - 2..].join(" > ")
+                )
+            } else {
+                full_path.clone()
+            };
             ui.add(
                 egui::Label::new(RichText::new(&path).monospace().size(12.0).color(p.text))
                     .truncate(),
             )
-            .on_hover_text(path);
+            .on_hover_text(full_path);
         });
     }
 
@@ -516,7 +586,7 @@ impl App {
                     self.canvas
                         .show(ui, &self.graph, self.dark, &mut self.pointer);
                     if let Some(message) = self.canvas.notice.take() {
-                        self.notify(crate::feedback::Kind::Info, message);
+                        self.notify(feedback::Kind::Info, message);
                     }
                     if !self.dirty && old_pointer != self.pointer {
                         self.pending_reveal = Some(self.pointer.clone());

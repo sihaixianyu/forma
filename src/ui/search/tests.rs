@@ -7,7 +7,7 @@ fn invalid_app(ctx: &egui::Context) -> App {
     app.editor = "{\n  \"中文\": }".into();
     app.full_text = Arc::new(app.editor.clone());
     app.search_source = app.full_text.clone();
-    app.syntax_error = Some(crate::jobs::SyntaxError::new(
+    app.syntax_error = Some(crate::app::jobs::SyntaxError::new(
         &forma::parse_json(&app.editor).unwrap_err(),
         &app.editor,
     ));
@@ -64,7 +64,7 @@ fn error_shortcut_focuses_and_positions_the_active_editor() {
             if right {
                 app.view = View::Compare;
                 app.compare_text = "{\n  \"右边\": }".into();
-                app.right_syntax_error = Some(crate::jobs::SyntaxError::new(
+                app.right_syntax_error = Some(crate::app::jobs::SyntaxError::new(
                     &forma::parse_json(&app.compare_text).unwrap_err(),
                     &app.compare_text,
                 ));

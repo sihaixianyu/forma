@@ -1,6 +1,17 @@
 use super::*;
 
 impl App {
+    fn right_source_changed(&mut self) {
+        self.right_syntax_error = None;
+        self.right_json_valid = false;
+        self.search.right.changed();
+        self.revision += 1;
+        self.clear_comparison();
+        if self.dirty {
+            self.auto_due = Some(web_time::Instant::now() + std::time::Duration::from_millis(500));
+        }
+    }
+
     pub(super) fn next_difference(&mut self, backwards: bool) {
         let count = self.differences.len();
         if count == 0 {
@@ -36,10 +47,88 @@ impl App {
         if self.view == View::Graph {
             return;
         }
-        if ui.cursor().top() > self.pane_content_top + 0.5 {
-            ui.ctx().request_discard("Align pane contents");
+        align_content(ui, top, self.header_height());
+    }
+
+    pub(super) fn comparison_header(&mut self, ui: &mut egui::Ui, p: Palette, right_pane: bool) {
+        let show = !self.differences.is_empty()
+            || self.syntax_error.is_some()
+            || self.right_syntax_error.is_some();
+        if !show {
+            return;
         }
-        align_content(ui, self.pane_content_top, 0.0);
+        ui.horizontal(|ui| {
+            let count = self.differences.len();
+            let syntax = self
+                .right_syntax_error
+                .as_ref()
+                .map(|error| ("Right", error))
+                .or_else(|| self.syntax_error.as_ref().map(|error| ("Left", error)));
+            let both_invalid = self.syntax_error.is_some() && self.right_syntax_error.is_some();
+            let message = if both_invalid {
+                "Both inputs: Invalid JSON".into()
+            } else if let Some((side, error)) = syntax {
+                format!("{side}: {}", error.summary())
+            } else {
+                format!(
+                    "Difference {} / {}{}",
+                    self.compare_selected + 1,
+                    count,
+                    if count == 1000 { " (limit)" } else { "" }
+                )
+            };
+            let summary = ui.label(
+                RichText::new(message)
+                    .size(12.0)
+                    .color(if syntax.is_some() { p.red } else { p.muted }),
+            );
+            if let Some((_, error)) = syntax {
+                summary.clone().on_hover_text(if both_invalid {
+                    self.status.as_str()
+                } else {
+                    error.message.as_str()
+                });
+                let label = ui.ctx().format_shortcut(&error_shortcut());
+                if ui.button(format!("Go to error · {label}")).clicked() {
+                    self.jump_to_error(ui.ctx(), self.right_syntax_error.is_some());
+                }
+            }
+            if let Some(diff) = self.differences.get(self.compare_selected) {
+                summary.on_hover_text(format!(
+                    "{}\n− {}\n+ {}",
+                    diff.pointer, diff.left, diff.right
+                ));
+            }
+            if ui
+                .add_enabled(
+                    count > 0 && !self.busy,
+                    egui::Button::new("<").min_size(Vec2::new(28.0, 28.0)),
+                )
+                .on_hover_text("Previous difference")
+                .clicked()
+            {
+                self.next_difference(true);
+            }
+            if ui
+                .add_enabled(
+                    count > 0 && !self.busy,
+                    egui::Button::new(">").min_size(Vec2::new(28.0, 28.0)),
+                )
+                .on_hover_text("Next difference")
+                .clicked()
+            {
+                self.next_difference(false);
+            }
+            let size = if right_pane {
+                self.compare_text.len()
+            } else {
+                self.editor.len()
+            };
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(format_size(size)).size(11.0).color(p.muted));
+            });
+        });
+        self.path_separator(ui, p, right_pane);
     }
 
     pub(super) fn compare_panel(&mut self, ui: &mut egui::Ui, p: Palette) {
@@ -50,100 +139,14 @@ impl App {
             ui.set_min_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.spacing_mut().button_padding = Vec2::ZERO;
-            ui.horizontal(|ui| {
-                if !self.compare_text.trim().is_empty()
-                    || self.comparison_done
-                    || self.syntax_error.is_some()
-                    || self.right_syntax_error.is_some()
-                {
-                    let count = self.differences.len();
-                    let syntax = self
-                        .right_syntax_error
-                        .as_ref()
-                        .map(|error| ("Right", error))
-                        .or_else(|| self.syntax_error.as_ref().map(|error| ("Left", error)));
-                    let both_invalid =
-                        self.syntax_error.is_some() && self.right_syntax_error.is_some();
-                    let message = if both_invalid {
-                        "Both inputs: Invalid JSON".into()
-                    } else if let Some((side, error)) = syntax {
-                        format!("{side}: {}", error.summary())
-                    } else if !self.comparison_done {
-                        if self.error {
-                            self.status.clone()
-                        } else {
-                            "Updating comparison…".into()
-                        }
-                    } else if count == 0 {
-                        "Both documents are equal".into()
-                    } else {
-                        format!(
-                            "Difference {} / {}{}",
-                            self.compare_selected + 1,
-                            count,
-                            if count == 1000 { " (limit)" } else { "" }
-                        )
-                    };
-                    let summary = ui.label(
-                        RichText::new(message)
-                            .size(12.0)
-                            .color(if syntax.is_some() { p.red } else { p.muted }),
-                    );
-                    if let Some((_, error)) = syntax {
-                        summary.clone().on_hover_text(if both_invalid {
-                            self.status.as_str()
-                        } else {
-                            error.message.as_str()
-                        });
-                    }
-                    if syntax.is_some() {
-                        let label = ui.ctx().format_shortcut(&error_shortcut());
-                        if ui.button(format!("Go to error · {label}")).clicked() {
-                            self.jump_to_error(ui.ctx(), self.active_right);
-                        }
-                    }
-                    if let Some(diff) = self.differences.get(self.compare_selected) {
-                        summary.on_hover_text(format!(
-                            "{}\n− {}\n+ {}",
-                            diff.pointer, diff.left, diff.right
-                        ));
-                    }
-                    if ui
-                        .add_enabled(
-                            count > 0 && !self.busy,
-                            egui::Button::new("<").min_size(Vec2::new(28.0, 28.0)),
-                        )
-                        .on_hover_text("Previous difference")
-                        .clicked()
-                    {
-                        self.next_difference(true);
-                    }
-                    if ui
-                        .add_enabled(
-                            count > 0 && !self.busy,
-                            egui::Button::new(">").min_size(Vec2::new(28.0, 28.0)),
-                        )
-                        .on_hover_text("Next difference")
-                        .clicked()
-                    {
-                        self.next_difference(false);
-                    }
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(format_size(self.compare_text.len()))
-                            .size(11.0)
-                            .color(p.muted),
-                    );
-                });
-            });
-            self.path_separator(ui, p, true);
+            self.comparison_header(ui, p, true);
             self.right_search(ui, p);
             self.align_right_content(ui, top);
             let alignment = self.compare_alignment.clone();
             let height = ui.available_height().max(0.0);
             let offset = self.compare_scroll;
             let syntax_error = self.right_syntax_error.clone();
+            let typography = self.editor_typography;
             let scroll = editor_scroll(
                 ui,
                 EditorViewport {
@@ -157,8 +160,13 @@ impl App {
                     base: 0,
                     alignment: alignment.as_deref(),
                     syntax_error: syntax_error.as_ref(),
+                    font_size: typography.font_size,
                 },
                 |ui| {
+                    ui.style_mut().text_styles.insert(
+                        egui::TextStyle::Monospace,
+                        FontId::monospace(typography.font_size),
+                    );
                     let wrap_width = if self.view == View::Compare {
                         (ui.ctx().content_rect().width()
                             * self.split_ratio.min(1.0 - self.split_ratio)
@@ -168,12 +176,13 @@ impl App {
                         ui.available_width().max(80.0)
                     };
                     let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _width: f32| {
-                        let galley = self.compare_code.layout_width(
+                        let galley = self.compare_code.layout_width_with_typography(
                             ui,
                             text.as_str(),
                             self.dark,
                             &self.search.right.query,
                             wrap_width,
+                            typography,
                         );
                         self.compare_code.align(
                             ui,
@@ -190,6 +199,7 @@ impl App {
                         ui,
                         "compare_editor",
                         indentation_changed,
+                        typography.line_height,
                         egui::TextEdit::multiline(&mut self.compare_text)
                             .id(egui::Id::new("forma_compare"))
                             .font(egui::TextStyle::Monospace)
@@ -205,16 +215,7 @@ impl App {
                     );
                     decoded_hover(ui, &output, &self.compare_text);
                     if output.response.changed() {
-                        self.right_syntax_error = None;
-                        self.right_json_valid = false;
-                        self.search.right.changed();
-                        self.revision += 1;
-                        self.clear_comparison();
-                        if self.dirty {
-                            self.auto_due = Some(
-                                web_time::Instant::now() + std::time::Duration::from_millis(500),
-                            );
-                        }
+                        self.right_source_changed();
                     }
                     output.response.context_menu(|ui| {
                         ui.add_enabled_ui(!self.busy || self.automatic_job, |ui| {
@@ -229,11 +230,7 @@ impl App {
                             }
                             if ui.button("Clear").clicked() {
                                 self.compare_text.clear();
-                                self.right_syntax_error = None;
-                                self.right_json_valid = false;
-                                self.search.right.changed();
-                                self.revision += 1;
-                                self.clear_comparison();
+                                self.right_source_changed();
                                 ui.close();
                                 ui.ctx().request_discard("Right document cleared");
                             }
@@ -295,7 +292,7 @@ impl App {
             );
             if (scroll.state.offset.y - offset).abs() > 0.5 {
                 self.compare_scroll = scroll.state.offset.y;
-                ui.ctx().request_discard("Synchronize comparison scrolling");
+                ui.ctx().request_repaint();
             }
         });
     }

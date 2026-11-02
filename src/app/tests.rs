@@ -2,6 +2,7 @@ use super::*;
 
 mod state;
 mod workspace;
+mod workspace_gpu;
 
 pub(super) fn ready_app() -> App {
     let mut app = App::create(egui::Context::default(), "test".into());

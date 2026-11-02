@@ -293,3 +293,85 @@ Undo history tracks retained byte counts incrementally instead of summing every
 snapshot after each edit. Repeated actions reuse unchanged dirty source text.
 These changes reduce allocations and history accounting work; no additional
 frame-time speedup is claimed without a new benchmark.
+
+## Large-document editor scrolling
+
+The editors retain the full layout for editing and navigation, but submit only
+visible rows to tessellation. This avoids reserving GPU mesh staging vectors
+for every character in the document on each frame. Cached row offsets also
+avoid scanning from the beginning for gutters, hover previews and difference
+highlights. Left and right scrollbar changes redraw the linked panes in the
+same frame.
+
+On 2026-11-02, native release benchmarks on this Apple Silicon workstation
+measured these Compare scroll frames, with approximately 20 MB in each editor:
+
+| Input | Before, median | After, median |
+| --- | ---: | ---: |
+| Minified, 19,743,573 bytes | 21.39 ms | 10.48 ms |
+| Pretty, 19,999,976 bytes | 46.66 ms | 9.88 ms |
+
+These are eight-frame CPU measurements of the actual workspace UI plus
+tessellation, without a window or GPU. They exclude initial layout, which
+still processes the entire document, and do not measure browser frame rates.
+These measurements predate the single-pass scroll synchronization fix below.
+UI regression checks exercise far jumps, scrollbar dragging, linked panes,
+visible mesh bounds, and wrapped Unicode hover previews.
+
+```sh
+FORMA_BENCH_BYTES=20000000 cargo run --offline --release --features bench-ui -- --bench-editor
+```
+
+## Very long single-line layout regression
+
+A 21,500,003-byte minified JSON reproduced a native GPU failure while dragging
+the scrollbar to the end. Epaint first accumulates each paragraph's glyph x
+positions with `f32`, then wraps the paragraph. At extreme widths, x coordinates
+stop advancing: the final displayed row contained 4,706,925 glyphs and
+17,076,288 vertices. Both editors together requested a 683,419,440-byte vertex
+buffer, exceeding the tested device's 268,435,456-byte limit.
+
+Long logical lines now lay out in bounded 16 KiB chunks. Chunk boundaries remain
+visual wraps; the document text, actual newline count and character offsets are
+preserved. The same scrollbar-to-end GPU check now paints roughly 19,000 total
+vertices and retains visible string pixels. The explicit GPU smoke test reads
+back the rendered pixels, covering press, continuous drag and release:
+
+```sh
+cargo test --offline --bin forma scrollbar_drag_keeps_document_glyphs -- --ignored --nocapture
+```
+
+## Browser page movement while dragging
+
+The browser's root document could scroll when eframe refocused its hidden IME
+input outside the viewport. `overflow: hidden` hides scrollbars but still allows
+programmatic focus scrolling. This moved the entire canvas upwards and exposed
+the dark body background below the Path footer. Native GPU mesh checks cannot
+detect this DOM movement.
+
+The root uses `overflow: clip`, and the body and canvas are fixed to the viewport.
+Chrome regression checks synchronously verify offscreen input focus (before a
+later canvas focus can hide the failure), then paste a 3,950,002-character JSON,
+drag its scrollbar, click and type, and verify the canvas still covers the
+viewport. The local development page was tested directly:
+
+```sh
+node test/browser-page-scroll.mjs http://127.0.0.1:8080 9236
+```
+
+The last argument is the CDP port of a dedicated Chrome test instance.
+
+## Single-pass scroll synchronization
+
+Continuous comparison scrolling formerly called `request_discard` to redraw
+the whole workspace twice per frame, triggering egui's persistent PERF warning.
+The pane receiving pointer scroll input now renders first. After ScrollArea
+resolves its final offset, that pane's content paint is moved to the final,
+pixel-rounded origin and its visible rows are selected again; the other pane
+uses the same offset. Gutters are drawn at the updated origin. Ordinary scrolling
+requests repaint without discarding a layout pass. Header alignment uses the
+shared measured height rather than discarding a frame.
+
+Regression checks scroll both panes for consecutive frames and assert one
+completed layout pass per frame, aligned visible rows, and no PERF warning
+shape. GPU checks also assert a single pass during scrollbar dragging.

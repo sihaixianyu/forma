@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(target_arch = "wasm32")]
+use crate::browser;
 
 impl App {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -64,6 +66,7 @@ impl App {
             filename: "Untitled.json".into(),
             dark: ctx.system_theme().unwrap_or(egui::Theme::Light) == egui::Theme::Dark,
             theme_preference: egui::ThemePreference::System,
+            editor_typography: ui::EditorTypography::default(),
             code: ui::CodeCache::default(),
             error: false,
             syntax_error: None,
@@ -85,7 +88,6 @@ impl App {
             compare_search_source: Arc::new(String::new()),
             compare_alignment: None,
             compare_scroll: 0.0,
-            pane_content_top: 0.0,
             right_header_height: 0.0,
             source_header_height: 0.0,
             compare_selected: 0,
@@ -229,12 +231,7 @@ impl App {
                     self.syntax_error = left;
                     self.right_json_valid = right.is_none();
                     self.right_syntax_error = right;
-                    self.differences.clear();
-                    self.compare_alignment = None;
-                    self.comparison_done = false;
-                    self.compare_left_range = None;
-                    self.compare_right_range = None;
-                    self.compare_jump = false;
+                    self.reset_comparison_results();
                     self.compare_due = None;
                     self.error = true;
                     self.status = [
@@ -288,7 +285,7 @@ impl App {
                     }
                 }
                 Ok(Output::Invalid(text, error)) => {
-                    self.syntax_error = Some(crate::jobs::SyntaxError::new(&error, &text));
+                    self.syntax_error = Some(jobs::SyntaxError::new(&error, &text));
                     self.editable = text.len() <= EDIT_LIMIT || (self.editable && !done.reset_view);
                     self.editor = if self.editable {
                         (*text).clone()
@@ -361,16 +358,15 @@ impl App {
                 }
                 Err(error) => {
                     if let Some(message) = error.strip_prefix("Left JSON: ") {
-                        self.syntax_error =
-                            Some(crate::jobs::SyntaxError::new(message, &self.full_text));
+                        self.syntax_error = Some(jobs::SyntaxError::new(message, &self.full_text));
                     } else if let Some(message) = error.strip_prefix("Right JSON: ") {
                         self.right_json_valid = false;
                         self.right_syntax_error =
-                            Some(crate::jobs::SyntaxError::new(message, &self.compare_text));
+                            Some(jobs::SyntaxError::new(message, &self.compare_text));
                     } else if done.label == "Format right JSON" {
                         self.right_json_valid = false;
                         self.right_syntax_error =
-                            Some(crate::jobs::SyntaxError::new(&error, &self.compare_text));
+                            Some(jobs::SyntaxError::new(&error, &self.compare_text));
                     }
                     if let Some(dialog) = &mut self.edit_dialog {
                         dialog.error = error.clone();

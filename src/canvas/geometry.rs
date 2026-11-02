@@ -97,7 +97,7 @@ impl Canvas {
                     border
                 };
                 curve.stroke =
-                    Stroke::new(if hovered == Some(index) { 2.5 } else { 1.5 }, color).into();
+                    Stroke::new(if hovered == Some(index) { 2.5 } else { 1.5_f32 }, color).into();
                 if let Some(curve) = visible_edge(curve, rect.expand(8.0)) {
                     painter.add(curve);
                 }

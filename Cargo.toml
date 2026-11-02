@@ -5,6 +5,9 @@ edition = "2024"
 license = "Apache-2.0"
 description = "A native and WebAssembly JSON editor and viewer"
 
+[lib]
+path = "src/core/mod.rs"
+
 [dependencies]
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11"] }
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision", "raw_value"] }

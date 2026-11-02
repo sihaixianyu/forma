@@ -1,5 +1,8 @@
 use super::*;
 
+mod viewport;
+use viewport::{code_rows, paint_visible_rows};
+
 pub(super) fn editor_id_key(salt: &str) -> egui::Id {
     egui::Id::new(("forma_editor", salt))
 }
@@ -218,11 +221,16 @@ pub(super) fn show_code_editor(
     ui: &mut egui::Ui,
     salt: &str,
     changed: bool,
+    line_height: f32,
     editor: egui::TextEdit<'_>,
 ) -> egui::text_edit::TextEditOutput {
+    let first_shape = ui
+        .ctx()
+        .graphics_mut(|graphics| graphics.entry(ui.layer_id()).next_idx());
     let stroke = ui.visuals().text_cursor.stroke;
     ui.visuals_mut().text_cursor.stroke.color = Color32::TRANSPARENT;
     let mut output = editor.show(ui);
+    paint_visible_rows(ui, first_shape, &output.galley);
     ui.visuals_mut().text_cursor.stroke = stroke;
     if changed {
         output.response.mark_changed();
@@ -275,11 +283,10 @@ pub(super) fn show_code_editor(
             .map_or(now, |(_, at)| at);
         ui.ctx().data_mut(|data| data.insert_temp(key, (range, at)));
         let mut rect = output.galley.pos_from_cursor(range.primary);
-        let font = ui.style().text_styles[&egui::TextStyle::Monospace].clone();
         if rect.height() == 0.0 {
-            rect.max.y = rect.min.y + ui.fonts_mut(|fonts| fonts.row_height(&font));
+            rect.max.y = rect.min.y + line_height;
         }
-        let rect = egui::Rect::from_center_size(rect.center(), Vec2::new(0.0, font.size + 2.0))
+        let rect = egui::Rect::from_center_size(rect.center(), Vec2::new(0.0, line_height))
             .translate(output.galley_pos.to_vec2());
         egui::text_selection::visuals::paint_text_cursor(
             ui,
@@ -295,24 +302,39 @@ pub(super) fn decoded_hover(ui: &egui::Ui, output: &egui::text_edit::TextEditOut
     let value = if output.response.hovered() {
         ui.input(|input| input.pointer.hover_pos())
             .and_then(|mouse| {
-                let cursor = output.galley.cursor_from_pos(mouse - output.galley_pos);
-                let rect = output
+                let rows = code_rows(ui.ctx(), output.response.id, &output.galley);
+                let pos = mouse - output.galley_pos;
+                let index = output
                     .galley
-                    .pos_from_cursor(cursor)
-                    .translate(output.galley_pos.to_vec2());
-                if (rect.min.x - mouse.x).abs() > 12.0 || (rect.center().y - mouse.y).abs() > 15.0 {
+                    .rows
+                    .partition_point(|row| row.pos.y + row.size.y < pos.y);
+                let row = output.galley.rows.get(index)?;
+                let column = row.char_at(pos.x - row.pos.x);
+                if (row.pos.x + row.x_offset(column) - pos.x).abs() > 12.0
+                    || (row.pos.y + row.size.y * 0.5 - pos.y).abs() > 15.0
+                {
                     return None;
                 }
-                let offset = text
-                    .char_indices()
-                    .nth(cursor.index)
-                    .map_or(text.len(), |(offset, _)| offset);
-                forma::decode::string_at(text, offset)
+                let offset = rows.bytes[index]
+                    + row.glyphs[..column]
+                        .iter()
+                        .map(|glyph| glyph.chr.len_utf8())
+                        .sum::<usize>();
+                let sections = &output.galley.job.sections;
+                let section = sections
+                    .get(sections.partition_point(|section| section.byte_range.end <= offset))?;
+                // Syntax sections contain whole string tokens, including wrapped strings.
+                // Searching this token avoids rescanning the source from byte zero on scroll.
+                let token = text.get(section.byte_range.clone())?;
+                if token.len() > forma::decode::MAX_PREVIEW_BYTES + 2 {
+                    return None;
+                }
+                forma::decode::string_at(token, offset - section.byte_range.start)
             })
     } else {
         None
     };
-    crate::decode_ui::show(&output.response, value.as_deref());
+    crate::ui::decode_ui::show(&output.response, value.as_deref());
 }
 
 pub(super) struct EditorViewport<'a> {
@@ -325,7 +347,8 @@ pub(super) struct EditorViewport<'a> {
     pub(super) first_line: usize,
     pub(super) base: usize,
     pub(super) alignment: Option<&'a forma::alignment::Alignment>,
-    pub(super) syntax_error: Option<&'a crate::jobs::SyntaxError>,
+    pub(super) syntax_error: Option<&'a crate::app::jobs::SyntaxError>,
+    pub(super) font_size: f32,
 }
 
 pub(super) const EDITOR_GUTTER_WIDTH: f32 = 44.0;
@@ -358,7 +381,51 @@ pub(super) fn editor_scroll(
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
         }
         let active_background = ui.painter().add(egui::Shape::Noop);
-        let scroll = area.show(ui, contents);
+        let mut rendered_offset = Vec2::ZERO;
+        let mut content_shapes = (egui::layers::ShapeIdx(0), egui::layers::ShapeIdx(0));
+        let mut scroll = area.show_viewport(ui, |ui, viewport| {
+            rendered_offset = viewport.min.to_vec2();
+            content_shapes.0 = ui
+                .ctx()
+                .graphics_mut(|graphics| graphics.entry(ui.layer_id()).next_idx());
+            let output = contents(ui);
+            content_shapes.1 = ui
+                .ctx()
+                .graphics_mut(|graphics| graphics.entry(ui.layer_id()).next_idx());
+            output
+        });
+        // ScrollArea handles wheel/scrollbar changes after laying out its contents.
+        // Move this pane's paint to that final offset without discarding the whole frame.
+        let scale = ui.pixels_per_point();
+        let snap = |pos: egui::Pos2| {
+            egui::pos2(
+                (pos.x * scale).round() / scale,
+                (pos.y * scale).round() / scale,
+            )
+        };
+        let delta = snap(scroll.inner_rect.min - scroll.state.offset)
+            - snap(scroll.inner_rect.min - rendered_offset);
+        if delta != Vec2::ZERO {
+            ui.ctx().graphics_mut(|graphics| {
+                let list = graphics.entry(ui.layer_id());
+                for index in content_shapes.0.0..content_shapes.1.0 {
+                    list.mutate_shape(egui::layers::ShapeIdx(index), |clipped| {
+                        clipped.shape.translate(delta);
+                        if let egui::Shape::Text(shape) = &mut clipped.shape
+                            && Arc::ptr_eq(&shape.galley.job, &scroll.inner.galley.job)
+                        {
+                            // Restore the complete layout before selecting the newly visible rows.
+                            // The earlier paint shape contains only the previous viewport's rows.
+                            shape.pos = scroll.inner.galley_pos + delta;
+                            shape.galley = scroll.inner.galley.clone();
+                        }
+                    });
+                }
+            });
+            scroll.inner.galley_pos += delta;
+            scroll.inner.response.rect = scroll.inner.response.rect.translate(delta);
+            paint_visible_rows(ui, content_shapes.0, &scroll.inner.galley);
+        }
         let output = &scroll.inner;
         let gutter = egui::Rect::from_min_max(
             egui::pos2(gutter.left(), scroll.inner_rect.top()),
@@ -379,26 +446,21 @@ pub(super) fn editor_scroll(
             .filter(|side| side.source == output.galley.job.text);
         let color = if view.left { p.red } else { p.green };
         let text_painter = ui.painter().with_clip_rect(scroll.inner_rect);
+        let rows = code_rows(ui.ctx(), output.response.id, &output.galley);
         let active_line = output
             .response
             .has_focus()
             .then(|| output.state.cursor.char_range())
             .flatten()
-            .map(|range| {
-                let row = output.galley.layout_from_cursor(range.primary).row;
-                output.galley.rows[..row]
-                    .iter()
-                    .filter(|row| row.ends_with_newline)
-                    .count()
-            });
+            .map(|range| rows.lines[rows.row_for_cursor(&output.galley, range.primary)]);
         let mut active_shapes = Vec::new();
-        let mut line = 0;
-        let mut first_visual_row = true;
-        for row in &output.galley.rows {
-            let index = line;
-            let number = first_visual_row;
-            first_visual_row = row.ends_with_newline;
-            line += usize::from(row.ends_with_newline);
+        let first = output
+            .galley
+            .rows
+            .partition_point(|row| output.galley_pos.y + row.pos.y + row.size.y < gutter.top());
+        for (visual_row, row) in output.galley.rows.iter().enumerate().skip(first) {
+            let index = rows.lines[visual_row];
+            let number = visual_row == 0 || output.galley.rows[visual_row - 1].ends_with_newline;
             let y = output.galley_pos.y + row.pos.y;
             if y > gutter.bottom() {
                 break;
@@ -442,7 +504,7 @@ pub(super) fn editor_scroll(
                 let response = ui
                     .interact(
                         rect,
-                        ui.id().with(("syntax_error", index)),
+                        ui.id().with(("syntax_error", visual_row)),
                         egui::Sense::click(),
                     )
                     .on_hover_text(&error.message);
@@ -466,14 +528,12 @@ pub(super) fn editor_scroll(
                 let response = ui
                     .interact(
                         gutter_row,
-                        ui.id().with(("line_number", index, number)),
+                        ui.id().with(("line_number", visual_row)),
                         egui::Sense::click(),
                     )
                     .on_hover_cursor(egui::CursorIcon::Text);
                 if response.clicked() {
-                    let cursor = output
-                        .galley
-                        .cursor_from_pos(egui::vec2(0.0, row.pos.y + row.size.y * 0.5));
+                    let cursor = egui::text::CCursor::new(rows.chars[visual_row]);
                     let mut state = output.state.clone();
                     state
                         .cursor
@@ -505,10 +565,10 @@ pub(super) fn editor_scroll(
             }
             if number {
                 painter.text(
-                    egui::pos2(gutter.right() - 5.0, y),
-                    egui::Align2::RIGHT_TOP,
+                    egui::pos2(gutter.right() - 5.0, y + row.size.y * 0.5),
+                    egui::Align2::RIGHT_CENTER,
                     (index + view.first_line).to_string(),
-                    FontId::monospace(EDITOR_FONT_SIZE),
+                    FontId::monospace(view.font_size),
                     if active {
                         p.accent
                     } else if invalid.is_some() {
@@ -539,31 +599,42 @@ pub(super) fn highlight_difference(
     if range.start < base || range.end > base + text.len() {
         return;
     }
-    let start = text[..range.start - base].chars().count();
-    let end = start + text[range.start - base..range.end - base].chars().count();
-    let painter = ui.painter().with_clip_rect(output.text_clip_rect);
-    let mut offset = 0;
-    for row in &output.galley.rows {
-        let row_end = offset + row.glyphs.len();
-        if start <= row_end && end > offset {
-            let a = output
-                .galley
-                .pos_from_cursor(egui::text::CCursor::new(start.max(offset)));
-            let b = output
-                .galley
-                .pos_from_cursor(egui::text::CCursor::new(end.min(row_end)));
-            let rect = egui::Rect::from_min_max(
-                egui::pos2(a.min.x, row.pos.y),
-                egui::pos2(b.min.x.max(a.min.x + 3.0), row.pos.y + row.size.y),
-            )
-            .translate(output.galley_pos.to_vec2());
-            painter.rect_filled(rect, 2, color.gamma_multiply(0.12));
-            painter.line_segment(
-                [rect.left_bottom(), rect.right_bottom()],
-                Stroke::new(1.5_f32, color),
-            );
+    let rows = code_rows(ui.ctx(), output.response.id, &output.galley);
+    let clip = output.text_clip_rect.intersect(ui.clip_rect());
+    let top = clip.top() - output.galley_pos.y;
+    let bottom = clip.bottom() - output.galley_pos.y;
+    let painter = ui.painter().with_clip_rect(clip);
+    let first = output
+        .galley
+        .rows
+        .partition_point(|row| row.pos.y + row.size.y < top);
+    for (index, row) in output.galley.rows.iter().enumerate().skip(first) {
+        if row.pos.y > bottom {
+            break;
         }
-        offset = row_end + usize::from(row.ends_with_newline);
+        let start = rows.bytes[index];
+        let end = rows.bytes[index + 1] - usize::from(row.ends_with_newline);
+        if range.start >= base + end || range.end <= base + start {
+            continue;
+        }
+        let a = range.start.max(base + start) - base;
+        let b = range.end.min(base + end) - base;
+        let (Some(before), Some(found)) = (text.get(start..a), text.get(a..b)) else {
+            continue;
+        };
+        let column = before.chars().count();
+        let left = row.pos.x + row.x_offset(column);
+        let right = row.pos.x + row.x_offset(column + found.chars().count());
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(left, row.pos.y),
+            egui::pos2(right.max(left + 3.0), row.pos.y + row.size.y),
+        )
+        .translate(output.galley_pos.to_vec2());
+        painter.rect_filled(rect, 2, color.gamma_multiply(0.12));
+        painter.line_segment(
+            [rect.left_bottom(), rect.right_bottom()],
+            Stroke::new(1.5_f32, color),
+        );
     }
 }
 

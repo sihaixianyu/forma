@@ -1,6 +1,6 @@
 use super::*;
 
-mod tests {
+mod history_tests {
 
     use super::*;
 
@@ -58,6 +58,7 @@ mod viewport_tests {
                             base: 0,
                             alignment: None,
                             syntax_error: None,
+                            font_size: EDITOR_FONT_SIZE,
                         },
                         |ui| {
                             let mut layouter =
@@ -68,6 +69,7 @@ mod viewport_tests {
                                 ui,
                                 "active_line_test",
                                 false,
+                                EDITOR_LINE_HEIGHT,
                                 egui::TextEdit::multiline(text)
                                     .font(egui::TextStyle::Monospace)
                                     .code_editor()
@@ -148,7 +150,7 @@ mod viewport_tests {
         configure(&ctx, false);
         let mut text = "{\n  \"中文\": }".to_owned();
         let message = forma::parse_json(&text).unwrap_err();
-        let diagnostic = crate::jobs::SyntaxError::new(&message, &text);
+        let diagnostic = crate::app::jobs::SyntaxError::new(&message, &text);
         let mut cache = CodeCache::default();
         let mut editor_id = egui::Id::NULL;
         let render = |ctx: &egui::Context,
@@ -169,6 +171,7 @@ mod viewport_tests {
                         base: 0,
                         alignment: None,
                         syntax_error: Some(&diagnostic),
+                        font_size: EDITOR_FONT_SIZE,
                     },
                     |ui| {
                         let mut layouter =
@@ -179,6 +182,7 @@ mod viewport_tests {
                             ui,
                             "error_test",
                             false,
+                            EDITOR_LINE_HEIGHT,
                             egui::TextEdit::multiline(text)
                                 .code_editor()
                                 .desired_rows(8)
@@ -239,5 +243,243 @@ mod viewport_tests {
             text[..diagnostic.offset.unwrap()].chars().count()
         );
         assert!(ctx.memory(|memory| memory.has_focus(editor_id)));
+    }
+}
+
+// Exercise real TextEdit, ScrollArea and tessellation without a window.
+mod large_document_ui_tests {
+    use super::*;
+
+    #[test]
+    fn far_scroll_and_scrollbar_drag_keep_text_visible_with_bounded_paint_meshes() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        configure(&ctx, false);
+        let mut text = "  {\"name\":\"中文🙂 wrapped value\",\"id\":123},\n".repeat(60_000);
+        let mut cache = CodeCache::default();
+        let mut offset = 0.0;
+        let mut extent = 0.0;
+        let mut inner = egui::Rect::ZERO;
+        let mut last_shape_y = 0.0;
+        let mut track = egui::Rect::ZERO;
+        for frame in 0..8 {
+            let pos = egui::pos2(track.center().x, track.bottom() - 18.0);
+            let events = match frame {
+                3 => vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                4 => vec![egui::Event::PointerMoved(egui::pos2(
+                    pos.x,
+                    track.top() + 18.0,
+                ))],
+                5 => vec![egui::Event::PointerButton {
+                    pos: egui::pos2(pos.x, track.top() + 18.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                _ => vec![],
+            };
+            if frame == 1 {
+                offset = extent * 0.5;
+            }
+            if frame == 2 {
+                offset = extent - 240.0;
+            }
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(400.0, 300.0),
+                    )),
+                    time: Some(frame as f64 / 60.0),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let scroll = editor_scroll(
+                            ui,
+                            EditorViewport {
+                                salt: "large_scroll",
+                                wrap: true,
+                                height: 240.0,
+                                offset: Some(offset),
+                                palette: palette(false),
+                                left: true,
+                                first_line: 1,
+                                base: 0,
+                                alignment: None,
+                                syntax_error: None,
+                                font_size: EDITOR_FONT_SIZE,
+                            },
+                            |ui| {
+                                let mut layouter =
+                                    |ui: &egui::Ui, text: &dyn egui::TextBuffer, width: f32| {
+                                        cache.layout_width(ui, text.as_str(), false, "", width)
+                                    };
+                                show_code_editor(
+                                    ui,
+                                    "large_scroll",
+                                    false,
+                                    EDITOR_LINE_HEIGHT,
+                                    egui::TextEdit::multiline(&mut text)
+                                        .code_editor()
+                                        .frame(false)
+                                        .margin(Vec2::ZERO)
+                                        .desired_width(ui.available_width())
+                                        .layouter(&mut layouter),
+                                )
+                            },
+                        );
+                        assert!(scroll.inner.galley.rows.len() >= 60_000);
+                        assert_eq!(scroll.inner.galley.job.text, text);
+                        extent = scroll.content_size.y;
+                        inner = scroll.inner_rect;
+                        offset = scroll.state.offset.y;
+                    });
+                },
+            );
+            let painted = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(shape) if shape.galley.job.text == text => Some(shape),
+                    _ => None,
+                })
+                .expect("document text must be painted even after a far scroll");
+            assert!(!painted.galley.rows.is_empty());
+            assert!(
+                painted.galley.rows.len() < 20,
+                "only viewport rows may reach tessellation"
+            );
+            assert!(painted.galley.num_vertices < 4_000);
+            assert!(
+                painted
+                    .galley
+                    .mesh_bounds
+                    .translate(painted.pos.to_vec2())
+                    .intersects(inner)
+            );
+            last_shape_y = painted.pos.y;
+            track = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect)
+                        if rect.rect.width() < 20.0 && rect.rect.height() > 100.0 =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .expect("scrollbar track must be visible");
+            if frame >= 5 {
+                assert!(
+                    offset < extent * 0.1,
+                    "drag must move the scrollbar towards the top"
+                );
+            }
+            let meshes = ctx.tessellate(output.shapes, output.pixels_per_point);
+            assert!(meshes.iter().any(|primitive| matches!(&primitive.primitive,
+                egui::epaint::Primitive::Mesh(mesh) if mesh.vertices.len() > 100)));
+        }
+        assert!(
+            last_shape_y.abs() < 300.0,
+            "paint coordinates must remain near the viewport"
+        );
+    }
+}
+
+mod hover_ui_tests {
+    use super::*;
+
+    #[test]
+    fn hovering_a_wrapped_encoded_string_far_into_unicode_source_keeps_the_preview() {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        configure(&ctx, false);
+        let mut text = "  {\"prefix\":\"中文🙂\",\"value\":\"5Lit5paH\"},\n".repeat(5_000);
+        let character = text[..text.rfind("5Lit5paH").unwrap()].chars().count();
+        let mut cache = CodeCache::default();
+        let mut offset = 0.0;
+        let mut pointer = egui::Pos2::ZERO;
+        let mut id = egui::Id::NULL;
+        for frame in 0..3 {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(280.0, 300.0),
+                    )),
+                    events: if frame == 2 {
+                        vec![egui::Event::PointerMoved(pointer)]
+                    } else {
+                        vec![]
+                    },
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        editor_scroll(
+                            ui,
+                            EditorViewport {
+                                salt: "far_hover",
+                                wrap: true,
+                                height: 240.0,
+                                offset: Some(offset),
+                                palette: palette(false),
+                                left: true,
+                                first_line: 1,
+                                base: 0,
+                                alignment: None,
+                                syntax_error: None,
+                                font_size: EDITOR_FONT_SIZE,
+                            },
+                            |ui| {
+                                let mut layouter =
+                                    |ui: &egui::Ui, text: &dyn egui::TextBuffer, width: f32| {
+                                        cache.layout_width(ui, text.as_str(), false, "", width)
+                                    };
+                                let output = show_code_editor(
+                                    ui,
+                                    "far_hover",
+                                    false,
+                                    EDITOR_LINE_HEIGHT,
+                                    egui::TextEdit::multiline(&mut text)
+                                        .code_editor()
+                                        .frame(false)
+                                        .margin(Vec2::ZERO)
+                                        .desired_width(ui.available_width())
+                                        .layouter(&mut layouter),
+                                );
+                                let rect = output
+                                    .galley
+                                    .pos_from_cursor(egui::text::CCursor::new(character));
+                                if frame == 0 {
+                                    offset = rect.top() - 100.0;
+                                }
+                                pointer = output.galley_pos
+                                    + egui::vec2(rect.min.x + 3.0, rect.center().y);
+                                id = output.response.id;
+                                decoded_hover(ui, &output, &text);
+                                output
+                            },
+                        );
+                    });
+                },
+            );
+        }
+        assert_eq!(
+            ctx.data(|data| data.get_temp::<String>(id.with("decoded_preview")))
+                .as_deref(),
+            Some("5Lit5paH")
+        );
     }
 }

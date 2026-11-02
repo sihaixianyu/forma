@@ -1,5 +1,8 @@
 //! Actual workspace UI and tessellation CPU timings; no GPU or window required.
-use super::{App, View, ui};
+use crate::{
+    app::{App, View},
+    ui,
+};
 use eframe::egui;
 use std::{hint::black_box, sync::Arc, time::Instant};
 
@@ -35,6 +38,10 @@ fn frame(app: &mut App, ctx: &egui::Context, time: f64, scroll: bool) -> (f64, f
 }
 
 pub fn run() {
+    let bytes = std::env::var("FORMA_BENCH_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1_000_000);
     for pretty in [false, true] {
         let row = if pretty {
             "  {\n    \"id\": 12345,\n    \"name\": \"Forma performance example\",\n    \"active\": true,\n    \"data\": [1, 2, 3]\n  }"
@@ -43,7 +50,7 @@ pub fn run() {
         };
         let text = Arc::new(format!(
             "[\n{}\n]",
-            vec![row; 1_000_000 / (row.len() + 2)].join(if pretty { ",\n" } else { "," })
+            vec![row; bytes / (row.len() + 2)].join(if pretty { ",\n" } else { "," })
         ));
         for view in [View::Graph, View::Compare] {
             let ctx = egui::Context::default();

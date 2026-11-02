@@ -1,4 +1,4 @@
-use crate::{Completed, Job, Output, Work, execute};
+use crate::app::jobs::{Completed, Job, Output, Work, execute};
 use forma::{Document, Format, graph::Graph};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -152,8 +152,8 @@ enum Reply {
     },
     Invalid(Option<Arc<String>>, String),
     InvalidComparison(
-        Option<crate::jobs::SyntaxError>,
-        Option<crate::jobs::SyntaxError>,
+        Option<crate::app::jobs::SyntaxError>,
+        Option<crate::app::jobs::SyntaxError>,
     ),
     Comparison(
         Vec<forma::Difference>,
@@ -366,7 +366,7 @@ pub fn worker_dispatch(kind: &str, bytes: &[u8], id: usize) -> Result<Vec<u8>, J
         let _stage = forma::diagnostics::Stage::new("worker_job", bytes.len());
         match kind {
             "work" => process_request(bytes),
-            "search" => crate::find::process_remote(bytes),
+            "search" => crate::app::find::process_remote(bytes),
             _ => Err("Unknown Worker task".into()),
         }
         .map_err(|error| JsValue::from_str(&error))

@@ -11,9 +11,13 @@
     <link data-trunk rel="rust" data-bin="forma"
       data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int --enable-simd" />
     <style>
-      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
-      body { background: #f7f8fc; color: #343a4d; }
-      canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+      /* Hidden IME inputs can sit outside the viewport while large files scroll.
+         Unlike hidden, clip prevents focus from scrolling the document. */
+      html, body { width: 100%; height: 100%; margin: 0;
+        overflow: hidden; overflow: clip; overscroll-behavior: none; }
+      body { position: fixed; inset: 0; background: #f7f8fc; color: #343a4d; }
+      canvas { position: fixed; inset: 0; width: 100%; height: 100%;
+        display: block; touch-action: none; }
       #loading { position: fixed; inset: 0; display: grid; place-items: center;
         font: 16px system-ui, sans-serif; text-align: center; padding: 24px; }
       @media (prefers-color-scheme: dark) {

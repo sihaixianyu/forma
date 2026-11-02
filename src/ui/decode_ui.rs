@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, RichText, Vec2};
+use eframe::egui::{self, RichText, Vec2};
 
 /// Cache the hovered value so moving into the interactive tooltip keeps it open.
 pub fn show(response: &egui::Response, value: Option<&str>) {
@@ -61,16 +61,9 @@ pub fn show(response: &egui::Response, value: Option<&str>) {
 
 fn card(ui: &mut egui::Ui, value: &str) {
     let dark = ui.visuals().dark_mode;
-    let accent = if dark {
-        Color32::from_rgb(167, 151, 255)
-    } else {
-        Color32::from_rgb(110, 83, 218)
-    };
-    let header = if dark {
-        Color32::from_rgb(48, 40, 77)
-    } else {
-        Color32::from_rgb(239, 235, 253)
-    };
+    let palette = crate::ui::style::palette(dark);
+    let accent = palette.accent;
+    let header = palette.tint;
     let content = ui.visuals().extreme_bg_color;
     ui.set_width(340.0);
     for (encoding, text) in forma::decode::previews(value) {
