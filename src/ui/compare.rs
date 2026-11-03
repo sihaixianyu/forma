@@ -4,6 +4,9 @@ impl App {
     fn right_source_changed(&mut self) {
         self.right_syntax_error = None;
         self.right_json_valid = false;
+        self.right_pointer.clear();
+        self.right_caret_offset = None;
+        self.pending_right_source_offset = None;
         self.search.right.changed();
         self.revision += 1;
         self.clear_comparison();
@@ -23,6 +26,8 @@ impl App {
             (self.compare_selected + 1) % count
         };
         let pointer = self.differences[self.compare_selected].pointer.clone();
+        self.pointer.clone_from(&pointer);
+        self.right_pointer.clone_from(&pointer);
         let left = self.source();
         self.submit(Job::LocateDiff(
             left,
@@ -147,6 +152,9 @@ impl App {
             let offset = self.compare_scroll;
             let syntax_error = self.right_syntax_error.clone();
             let typography = self.editor_typography;
+            if self.search.right_jump || self.error_jump == Some(true) || self.compare_jump {
+                expand_editor_folds(ui.ctx(), egui::Id::new("forma_compare"));
+            }
             let scroll = editor_scroll(
                 ui,
                 EditorViewport {
@@ -170,7 +178,7 @@ impl App {
                     let wrap_width = if self.view == View::Compare {
                         (ui.ctx().content_rect().width()
                             * self.split_ratio.min(1.0 - self.split_ratio)
-                            - 104.0)
+                            - 120.0)
                             .max(80.0)
                     } else {
                         ui.available_width().max(80.0)
@@ -184,13 +192,20 @@ impl App {
                             wrap_width,
                             typography,
                         );
-                        self.compare_code.align(
+                        let galley = self.compare_code.align(
                             ui,
                             galley,
                             alignment.as_ref(),
                             false,
                             &self.editor,
                             wrap_width,
+                        );
+                        fold_galley(
+                            ui,
+                            egui::Id::new("forma_compare"),
+                            galley,
+                            alignment.as_deref(),
+                            false,
                         )
                     };
                     let indentation_changed = (!self.busy || self.automatic_job)
@@ -214,6 +229,14 @@ impl App {
                             .layouter(&mut layouter),
                     );
                     decoded_hover(ui, &output, &self.compare_text);
+                    if !output.response.changed()
+                        && output.response.has_focus()
+                        && let Some(offset) = caret_source_offset(&output, &self.compare_text)
+                        && self.right_caret_offset != Some(offset)
+                    {
+                        self.right_caret_offset = Some(offset);
+                        self.pending_right_source_offset = Some(offset);
+                    }
                     if output.response.changed() {
                         self.right_source_changed();
                     }

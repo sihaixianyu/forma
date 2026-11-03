@@ -23,6 +23,22 @@ fn main() {
         doc.text.len(),
         graph.nodes.len()
     );
+    let offset = doc.text.find("中文").unwrap();
+    measure("source navigation uncached (100 lookups)", || {
+        for _ in 0..100 {
+            black_box(forma::edit::pointer_at_offset(&doc.text, offset).unwrap());
+        }
+    });
+    measure("source navigation cached (100 lookups)", || {
+        for _ in 0..100 {
+            black_box(
+                forma::source_index::cached(&doc.text)
+                    .unwrap()
+                    .pointer_at_offset(offset)
+                    .unwrap(),
+            );
+        }
+    });
     measure("graph build", || {
         black_box(build_graph(&doc.value));
     });

@@ -6,6 +6,7 @@ __pycache__/
 *.rs.bk
 *.profraw
 *.profdata
+/forma-debug.log
 
 # Local system and editor files
 .DS_Store

@@ -356,13 +356,14 @@ fn right_editor_formatting_does_not_replace_left_document() {
 #[test]
 fn source_click_selects_graph_without_requesting_a_source_reveal_loop() {
     let mut app = ready_app();
+    app.source_caret_offset = Some(10);
     let (sender, receiver) = mpsc::channel();
     sender
         .send(Completed {
             target: None,
             revision: app.revision,
             reset_view: false,
-            result: Ok(Output::SourcePointer(Some("/name".into()))),
+            result: Ok(Output::SourcePointer(10, Some("/name".into()))),
             elapsed: Duration::ZERO,
             label: "Locate graph node",
             user_action: false,
@@ -373,6 +374,28 @@ fn source_click_selects_graph_without_requesting_a_source_reveal_loop() {
     assert!(matches!(app.view, View::Graph));
     assert_eq!(app.pointer, "/name");
     assert!(app.pending_reveal.is_none());
+}
+
+#[test]
+fn stale_caret_lookup_cannot_move_path_or_graph_backwards() {
+    let mut app = ready_app();
+    app.pointer = "/controls/json_status".into();
+    app.source_caret_offset = Some(200);
+    let (sender, receiver) = mpsc::channel();
+    sender
+        .send(Completed {
+            target: None,
+            revision: app.revision,
+            reset_view: false,
+            result: Ok(Output::SourcePointer(100, Some("/controls".into()))),
+            elapsed: Duration::ZERO,
+            label: "Locate JSON path",
+            user_action: false,
+        })
+        .unwrap();
+    app.completed = receiver;
+    app.receive();
+    assert_eq!(app.pointer, "/controls/json_status");
 }
 
 #[test]

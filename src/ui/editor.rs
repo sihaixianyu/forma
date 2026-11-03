@@ -2,6 +2,8 @@ use super::*;
 
 mod viewport;
 use viewport::{code_rows, paint_visible_rows};
+mod folding;
+pub(super) use folding::{expand_editor_folds, fold_galley};
 
 pub(super) fn editor_id_key(salt: &str) -> egui::Id {
     egui::Id::new(("forma_editor", salt))
@@ -20,9 +22,34 @@ struct CodeHistory {
     past_bytes: usize,
     last_change: f64,
     boundary: bool,
+    last_job: std::sync::Weak<egui::text::LayoutJob>,
 }
 impl CodeHistory {
+    fn feed_job(
+        &mut self,
+        job: &Arc<egui::text::LayoutJob>,
+        cursor: egui::text::CCursorRange,
+        now: f64,
+        separate: bool,
+    ) {
+        if self
+            .last_job
+            .upgrade()
+            .is_some_and(|previous| Arc::ptr_eq(&previous, job))
+        {
+            if let Some(current) = self.current.as_mut() {
+                if current.cursor != cursor {
+                    self.boundary = true;
+                    current.cursor = cursor;
+                }
+            }
+            return;
+        }
+        self.feed(&job.text, cursor, now, separate);
+        self.last_job = Arc::downgrade(job);
+    }
     fn feed(&mut self, text: &str, cursor: egui::text::CCursorRange, now: f64, separate: bool) {
+        self.last_job = std::sync::Weak::new();
         if self
             .current
             .as_ref()
@@ -53,6 +80,7 @@ impl CodeHistory {
         }
     }
     fn undo(&mut self, redo: bool) -> Option<EditSnapshot> {
+        self.last_job = std::sync::Weak::new();
         let next = if redo {
             self.future.pop()?
         } else {
@@ -115,6 +143,20 @@ pub(super) fn prepare_code_input(ui: &egui::Ui, salt: &str, text: &mut String) -
     }
     if !ui.ctx().memory(|memory| memory.has_focus(id)) {
         return false;
+    }
+    if ui.input(|input| {
+        input.events.iter().any(|event| {
+            matches!(
+                event,
+                egui::Event::Key { pressed: true, .. }
+                    | egui::Event::Text(_)
+                    | egui::Event::Paste(_)
+                    | egui::Event::Cut
+                    | egui::Event::Ime(_)
+            )
+        })
+    }) {
+        expand_editor_folds(ui.ctx(), id);
     }
     let mut state = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
     let mut changed = false;
@@ -248,8 +290,8 @@ pub(super) fn show_code_editor(
         .cursor
         .char_range()
         .unwrap_or_else(|| egui::text::CCursorRange::one(egui::text::CCursor::new(0)));
-    code_history(ui.ctx(), salt).lock().unwrap().feed(
-        &output.galley.job.text,
+    code_history(ui.ctx(), salt).lock().unwrap().feed_job(
+        &output.galley.job,
         range,
         ui.input(|input| input.time),
         separate,
@@ -337,6 +379,53 @@ pub(super) fn decoded_hover(ui: &egui::Ui, output: &egui::text_edit::TextEditOut
     crate::ui::decode_ui::show(&output.response, value.as_deref());
 }
 
+pub(super) fn caret_source_offset(
+    output: &egui::text_edit::TextEditOutput,
+    text: &str,
+) -> Option<usize> {
+    let cursor = output
+        .cursor_range
+        .or_else(|| output.state.cursor.char_range())?
+        .primary;
+    Some(
+        text.char_indices()
+            .nth(cursor.index)
+            .map_or(text.len(), |(offset, _)| offset),
+    )
+}
+
+pub(super) fn pointer_source_offset(
+    output: &egui::text_edit::TextEditOutput,
+    text: &str,
+    mouse: egui::Pos2,
+) -> usize {
+    let cursor = output.galley.cursor_from_pos(mouse - output.galley_pos);
+    text.char_indices()
+        .nth(cursor.index)
+        .map_or(text.len(), |(offset, _)| offset)
+}
+
+pub(super) fn paint_readonly_caret(
+    ui: &egui::Ui,
+    output: &egui::text_edit::TextEditOutput,
+    character: usize,
+    line_height: f32,
+) {
+    let cursor = egui::text::CCursor::new(character);
+    let mut rect = output.galley.pos_from_cursor(cursor);
+    if rect.height() == 0.0 {
+        rect.max.y = rect.min.y + line_height;
+    }
+    let rect = egui::Rect::from_center_size(rect.center(), Vec2::new(0.0, line_height))
+        .translate(output.galley_pos.to_vec2());
+    egui::text_selection::visuals::paint_text_cursor(
+        ui,
+        &ui.painter().with_clip_rect(output.text_clip_rect),
+        rect,
+        0.0,
+    );
+}
+
 pub(super) struct EditorViewport<'a> {
     pub(super) salt: &'static str,
     pub(super) wrap: bool,
@@ -351,7 +440,7 @@ pub(super) struct EditorViewport<'a> {
     pub(super) font_size: f32,
 }
 
-pub(super) const EDITOR_GUTTER_WIDTH: f32 = 44.0;
+pub(super) const EDITOR_GUTTER_WIDTH: f32 = 60.0;
 pub(super) const EDITOR_GUTTER_GAP: f32 = 3.0;
 
 pub(super) fn editor_scroll(
@@ -465,7 +554,7 @@ pub(super) fn editor_scroll(
             if y > gutter.bottom() {
                 break;
             }
-            if y + row.size.y < gutter.top() {
+            if row.size.y == 0.0 || y + row.size.y < gutter.top() {
                 continue;
             }
             let active = active_line == Some(index);
@@ -492,7 +581,7 @@ pub(super) fn editor_scroll(
             if let Some(error) = invalid {
                 let rect = egui::Rect::from_min_size(
                     egui::pos2(gutter.left(), y),
-                    Vec2::new(gutter.width(), row.size.y),
+                    Vec2::new(gutter.width() - 16.0, row.size.y),
                 )
                 .intersect(gutter);
                 painter.rect_filled(rect, 2, p.red.gamma_multiply(0.16));
@@ -527,7 +616,10 @@ pub(super) fn editor_scroll(
             } else {
                 let response = ui
                     .interact(
-                        gutter_row,
+                        egui::Rect::from_min_max(
+                            gutter_row.min,
+                            egui::pos2(gutter_row.right() - 16.0, gutter_row.bottom()),
+                        ),
                         ui.id().with(("line_number", visual_row)),
                         egui::Sense::click(),
                     )
@@ -564,8 +656,19 @@ pub(super) fn editor_scroll(
                 );
             }
             if number {
+                folding::paint_fold_toggle(
+                    ui,
+                    output,
+                    index,
+                    egui::Rect::from_min_max(
+                        egui::pos2(gutter.right() - 16.0, y),
+                        egui::pos2(gutter.right(), y + row.size.y),
+                    )
+                    .intersect(gutter),
+                    p,
+                );
                 painter.text(
-                    egui::pos2(gutter.right() - 5.0, y + row.size.y * 0.5),
+                    egui::pos2(gutter.right() - 21.0, y + row.size.y * 0.5),
                     egui::Align2::RIGHT_CENTER,
                     (index + view.first_line).to_string(),
                     FontId::monospace(view.font_size),

@@ -5,6 +5,31 @@ mod history_tests {
     use super::*;
 
     #[test]
+    fn layout_identity_keeps_caret_redo_and_external_replacements_correct() {
+        let mut history = CodeHistory::default();
+        let job = |text: &str| {
+            Arc::new(egui::text::LayoutJob {
+                text: text.into(),
+                ..Default::default()
+            })
+        };
+        let cursor = |index| egui::text::CCursorRange::one(egui::text::CCursor::new(index));
+        let first = job("first");
+        let second = job("second");
+        history.feed_job(&first, cursor(0), 0.0, true);
+        history.feed_job(&second, cursor(0), 1.0, true);
+        history.feed_job(&second, cursor(3), 2.0, false);
+        assert_eq!(history.current.as_ref().unwrap().cursor, cursor(3));
+        assert_eq!(history.past.len(), 1);
+        assert_eq!(&**history.undo(false).unwrap().text, "first");
+        history.feed_job(&first, cursor(1), 3.0, false);
+        assert_eq!(&**history.undo(true).unwrap().text, "second");
+        history.feed("external", cursor(0), 4.0, true);
+        history.feed_job(&second, cursor(0), 5.0, true);
+        assert_eq!(&**history.current.as_ref().unwrap().text, "second");
+    }
+
+    #[test]
     fn history_byte_budget_remains_correct_after_trimming_undo_and_redo() {
         let mut history = CodeHistory::default();
         let cursor = egui::text::CCursorRange::one(egui::text::CCursor::new(0));
@@ -207,8 +232,7 @@ mod viewport_tests {
             })
             .expect("invalid line must have a red gutter marker");
         assert!(marker.height() > 0.0);
-        assert!(marker.width() >= EDITOR_GUTTER_WIDTH - 1.0);
-        assert!(marker.width() < 50.0);
+        assert!((marker.width() - (EDITOR_GUTTER_WIDTH - 16.0)).abs() < 1.0);
         let pos = marker.center();
         let _ = ctx.run(
             egui::RawInput {

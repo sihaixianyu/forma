@@ -14,11 +14,32 @@ window.formaWorkerConfig = {
   debug: new URLSearchParams(location.search).get('debug') === '1'
 };
 window.wasmBindings = bindings;
-const wasm = await init({ module_or_path: '{base}{wasm}' });
-dispatchEvent(new CustomEvent('TrunkApplicationStarted', {detail: { wasm: wasm }}));
+try {
+  const wasm = await init({ module_or_path: '{base}{wasm}' });
+  dispatchEvent(new CustomEvent('TrunkApplicationStarted', {detail: { wasm: wasm }}));
+} catch (error) {
+  const message = `[Forma STARTUP] ${error?.stack ?? error}`;
+  console.error(message);
+
+  const loading = document.getElementById('loading');
+  if (loading) {
+    loading.textContent = message;
+    loading.style.whiteSpace = 'pre-wrap';
+    loading.style.maxWidth = 'min(90vw, 960px)';
+    loading.style.textAlign = 'left';
+  }
+
+  fetch(`http://127.0.0.1:8081/log?message=${encodeURIComponent(message)}`, {
+    mode: 'no-cors',
+    cache: 'no-store',
+  }).catch(() => {});
+}
 </script>
 """
 
 [serve]
 addresses = ["127.0.0.1"]
 port = 8080
+
+[watch]
+ignore = ["forma-debug.log"]

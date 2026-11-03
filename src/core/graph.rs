@@ -29,6 +29,8 @@ pub struct GraphNode {
 pub struct Graph {
     pub nodes: Vec<GraphNode>,
     pub truncated: bool,
+    #[serde(default)]
+    scope_pointer: String,
     pointers: HashMap<String, usize>,
     children: Vec<Vec<usize>>,
     columns: Vec<Vec<usize>>,
@@ -124,6 +126,13 @@ fn hover_string(value: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn pointer_title(pointer: &str) -> String {
+    pointer.rsplit_once('/').map_or_else(
+        || "root".into(),
+        |(_, key)| key.replace("~1", "/").replace("~0", "~"),
+    )
+}
+
 /// Build a bounded local graph around a pointer omitted from the initial preview.
 pub fn build_graph_at(value: &Value, pointer: &str) -> Option<Graph> {
     let selected = value.pointer(pointer)?;
@@ -131,11 +140,7 @@ pub fn build_graph_at(value: &Value, pointer: &str) -> Option<Graph> {
     loop {
         let current = value.pointer(path)?;
         if current.is_object() || current.is_array() || path.is_empty() {
-            let title = path.rsplit_once('/').map_or_else(
-                || "root".into(),
-                |(_, key)| key.replace("~1", "/").replace("~0", "~"),
-            );
-            let mut graph = build_graph_root(current, path.into(), title);
+            let mut graph = build_graph_root(current, path.into(), pointer_title(path));
             if !selected.is_object() && !selected.is_array() && !graph.covers_pointer(pointer) {
                 let node = &mut graph.nodes[0];
                 let key = pointer.rsplit_once('/').map_or("value", |(_, key)| key);
@@ -151,30 +156,149 @@ pub fn build_graph_at(value: &Value, pointer: &str) -> Option<Graph> {
                 }
                 node.rows.push(row);
             }
+            attach_ancestor_context(value, path, &mut graph);
             return Some(graph);
         }
         path = path.rsplit_once('/')?.0;
     }
 }
 
-fn build_graph_root(value: &Value, root_pointer: String, title: String) -> Graph {
-    let _stage = crate::diagnostics::Stage::new("graph_build", 0);
-    fn row_value(value: &Value) -> String {
-        if let Value::Array(array) = value {
-            let mut parts: Vec<_> = array
-                .iter()
-                .take(4)
-                .map(|value| preview(&summary(value), 24).to_owned())
-                .collect();
-            if array.len() > 4 {
-                parts.push(format!("… {} items", array.len()));
-            }
-            preview(&format!("[{}]", parts.join(", ")), 100).into()
-        } else {
-            preview(&summary(value), 100).into()
+fn attach_ancestor_context(value: &Value, scope_pointer: &str, graph: &mut Graph) {
+    let mut ancestor_pointers = Vec::new();
+    let mut pointer = scope_pointer;
+    while let Some((parent, _)) = pointer.rsplit_once('/') {
+        ancestor_pointers.push(parent);
+        if parent.is_empty() {
+            break;
         }
+        pointer = parent;
+    }
+    ancestor_pointers.reverse();
+
+    let Some(scope_root) = graph.nodes.first() else {
+        return;
+    };
+    let scope_y = scope_root.y;
+
+    // Keep the focused node even for an unusually deep pointer. If the full chain
+    // cannot fit, retain the ancestors closest to the focused scope.
+    let context_limit = NODE_LIMIT.saturating_sub(1);
+    if ancestor_pointers.len() > context_limit {
+        ancestor_pointers.drain(..ancestor_pointers.len() - context_limit);
+        graph.truncated = true;
+    }
+    let context_count = ancestor_pointers.len();
+    if context_count == 0 {
+        return;
     }
 
+    while graph.nodes.len() + context_count > NODE_LIMIT {
+        graph.nodes.pop();
+        graph.truncated = true;
+    }
+
+    for node in &mut graph.nodes {
+        node.x += context_count as f32 * 350.0;
+        node.parent = node.parent.map(|parent| parent + context_count);
+    }
+    graph.nodes[0].parent = Some(context_count - 1);
+
+    let focused_nodes = std::mem::take(&mut graph.nodes);
+    graph.nodes.reserve(context_count + focused_nodes.len());
+    for (index, pointer) in ancestor_pointers.into_iter().enumerate() {
+        let Some(ancestor) = value.pointer(pointer) else {
+            return;
+        };
+        graph.nodes.push(graph_node(
+            ancestor,
+            pointer.into(),
+            pointer_title(pointer),
+            index,
+            index.checked_sub(1),
+            scope_y,
+        ));
+    }
+    graph.nodes.extend(focused_nodes);
+    finalize_graph(graph);
+}
+
+fn row_value(value: &Value) -> String {
+    if let Value::Array(array) = value {
+        let mut parts: Vec<_> = array
+            .iter()
+            .take(4)
+            .map(|value| preview(&summary(value), 24).to_owned())
+            .collect();
+        if array.len() > 4 {
+            parts.push(format!("… {} items", array.len()));
+        }
+        preview(&format!("[{}]", parts.join(", ")), 100).into()
+    } else {
+        preview(&summary(value), 100).into()
+    }
+}
+
+fn graph_node(
+    value: &Value,
+    pointer: String,
+    title: String,
+    depth: usize,
+    parent: Option<usize>,
+    y: f32,
+) -> GraphNode {
+    let count = match value {
+        Value::Object(map) => map.len(),
+        Value::Array(array) => array.len(),
+        _ => 1,
+    };
+    let rows = match value {
+        Value::Object(map) => map
+            .iter()
+            .take(8)
+            .map(|(key, value)| Row {
+                pointer: pointer_child(&pointer, key),
+                key: preview(key, 60).into(),
+                value: row_value(value),
+                kind: kind(value),
+                string: hover_string(value),
+            })
+            .collect(),
+        Value::Array(array) => array
+            .iter()
+            .take(8)
+            .enumerate()
+            .map(|(index, value)| Row {
+                pointer: pointer_child(&pointer, &index.to_string()),
+                key: index.to_string(),
+                value: row_value(value),
+                kind: kind(value),
+                string: hover_string(value),
+            })
+            .collect(),
+        _ => vec![Row {
+            pointer: pointer.clone(),
+            key: "value".into(),
+            value: preview(&summary(value), 100).into(),
+            kind: kind(value),
+            string: hover_string(value),
+        }],
+    };
+    let height = 52.0 + 24.0 * count.min(8) as f32 + if count > 8 { 24.0 } else { 0.0 };
+    GraphNode {
+        pointer,
+        title,
+        kind: kind(value),
+        rows,
+        count,
+        x: depth as f32 * 350.0,
+        y,
+        height,
+        parent,
+    }
+}
+
+fn build_graph_root(value: &Value, root_pointer: String, title: String) -> Graph {
+    let _stage = crate::diagnostics::Stage::new("graph_build", 0);
     fn visit(
         value: &Value,
         pointer: String,
@@ -189,55 +313,15 @@ fn build_graph_root(value: &Value, root_pointer: String, title: String) -> Graph
             return None;
         }
         let index = graph.nodes.len();
-        let count = match value {
-            Value::Object(map) => map.len(),
-            Value::Array(array) => array.len(),
-            _ => 1,
-        };
-        let rows = match value {
-            Value::Object(map) => map
-                .iter()
-                .take(8)
-                .map(|(key, value)| Row {
-                    pointer: pointer_child(&pointer, key),
-                    key: preview(key, 60).into(),
-                    value: row_value(value),
-                    kind: kind(value),
-                    string: hover_string(value),
-                })
-                .collect(),
-            Value::Array(array) => array
-                .iter()
-                .take(8)
-                .enumerate()
-                .map(|(index, value)| Row {
-                    pointer: pointer_child(&pointer, &index.to_string()),
-                    key: index.to_string(),
-                    value: row_value(value),
-                    kind: kind(value),
-                    string: hover_string(value),
-                })
-                .collect(),
-            _ => vec![Row {
-                pointer: pointer.clone(),
-                key: "value".into(),
-                value: preview(&summary(value), 100).into(),
-                kind: kind(value),
-                string: hover_string(value),
-            }],
-        };
-        let height = 52.0 + 24.0 * count.min(8) as f32 + if count > 8 { 24.0 } else { 0.0 };
-        graph.nodes.push(GraphNode {
-            pointer: pointer.clone(),
+        graph.nodes.push(graph_node(
+            value,
+            pointer.clone(),
             title,
-            kind: kind(value),
-            rows,
-            count,
-            x: depth as f32 * 350.0,
-            y: *next_y,
-            height,
+            depth,
             parent,
-        });
+            *next_y,
+        ));
+        let height = graph.nodes[index].height;
         let mut first = None;
         let mut last = None;
         let mut child = |key: String, value: &Value, graph: &mut Graph, next_y: &mut f32| {
@@ -283,8 +367,21 @@ fn build_graph_root(value: &Value, root_pointer: String, title: String) -> Graph
         *next_y = next_y.max(graph.nodes[index].y + height + 36.0);
         Some(index)
     }
-    let mut graph = Graph::default();
+    let mut graph = Graph {
+        scope_pointer: root_pointer.clone(),
+        ..Graph::default()
+    };
     visit(value, root_pointer, title, 0, None, &mut graph, &mut 0.0);
+    finalize_graph(&mut graph);
+    log::debug!(target: "forma", "event=graph_result nodes={} truncated={}", graph.nodes.len(), graph.truncated);
+    graph
+}
+
+fn finalize_graph(graph: &mut Graph) {
+    graph.pointers.clear();
+    graph.children.clear();
+    graph.columns.clear();
+    graph.max_height = 0.0;
     graph.children.resize_with(graph.nodes.len(), Vec::new);
     for (index, node) in graph.nodes.iter().enumerate() {
         graph.pointers.insert(node.pointer.clone(), index);
@@ -301,12 +398,18 @@ fn build_graph_root(value: &Value, root_pointer: String, title: String) -> Graph
     for column in &mut graph.columns {
         column.sort_by(|a, b| graph.nodes[*a].y.total_cmp(&graph.nodes[*b].y));
     }
-    log::debug!(target: "forma", "event=graph_result nodes={} truncated={}", graph.nodes.len(), graph.truncated);
-    graph
 }
 
 impl Graph {
     pub fn covers_pointer(&self, pointer: &str) -> bool {
+        if !self.scope_pointer.is_empty()
+            && pointer != self.scope_pointer
+            && !pointer
+                .strip_prefix(&self.scope_pointer)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+        {
+            return false;
+        }
         self.container_for(pointer).is_some_and(|index| {
             let node = &self.nodes[index];
             node.pointer == pointer || node.rows.iter().any(|row| row.pointer == pointer)

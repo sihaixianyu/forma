@@ -105,7 +105,11 @@ pub(super) fn paint_visible_rows(
                 let last = galley.rows.partition_point(|row| row.pos.y <= bottom);
                 let mut visible = (*template).clone();
                 visible.job = galley.job.clone();
-                visible.rows = galley.rows[first..last].to_vec();
+                visible.rows = galley.rows[first..last]
+                    .iter()
+                    .filter(|row| row.size.y > 0.0)
+                    .cloned()
+                    .collect();
                 visible.elided = true;
                 visible.pixels_per_point = galley.pixels_per_point;
                 let origin = visible.rows.first().map_or(0.0, |row| row.pos.y);

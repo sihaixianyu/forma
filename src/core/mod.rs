@@ -16,3 +16,5 @@ pub use document::{
 };
 pub use parser::parse_json;
 pub use value::{append_pointer, pointer_child, preview, summary};
+
+pub mod source_index;

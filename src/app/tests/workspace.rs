@@ -104,6 +104,232 @@ fn paths_stay_at_the_bottom_in_graph_compare_and_expanded_views() {
 }
 
 #[test]
+fn clicking_an_object_key_updates_the_path_to_that_key() {
+    let mut app = ready_app();
+    let (sender, receiver) = mpsc::channel();
+    app.jobs = sender.into();
+    let ctx = egui::Context::default();
+    ui::install_fonts(&ctx);
+    ui::configure(&ctx, false);
+    let frame = |app: &mut App, time, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.workspace(ctx),
+        )
+    };
+    let output = frame(&mut app, 0.0, vec![]);
+    let source = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == app.editor => Some(text),
+            _ => None,
+        })
+        .expect("source editor must be painted");
+    let key = app.editor.find("json_status").unwrap();
+    let character = app.editor[..key + "json_statu".len()].chars().count();
+    let key_start = source
+        .galley
+        .pos_from_cursor(egui::text::CCursor::new(character));
+    let key_end = source
+        .galley
+        .pos_from_cursor(egui::text::CCursor::new(character + 1));
+    let position = source.pos
+        + egui::vec2(
+            (key_start.left() + key_end.left()) * 0.5,
+            key_start.center().y,
+        );
+    frame(
+        &mut app,
+        0.1,
+        vec![
+            egui::Event::PointerMoved(position),
+            egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    frame(
+        &mut app,
+        0.2,
+        vec![egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    finish(
+        &mut app,
+        receiver.recv_timeout(Duration::from_secs(3)).unwrap(),
+    );
+    assert_eq!(app.pointer, "/controls/json_status");
+    let output = frame(&mut app, 0.3, vec![]);
+    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(text) if text.galley.job.text == "~ > controls > json_status")));
+}
+
+#[test]
+fn clicking_a_readonly_large_preview_moves_its_caret_and_path() {
+    let mut app = ready_app();
+    app.editable = false;
+    let (sender, receiver) = mpsc::channel();
+    app.jobs = sender.into();
+    let ctx = egui::Context::default();
+    ui::install_fonts(&ctx);
+    ui::configure(&ctx, false);
+    let frame = |app: &mut App, time, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.workspace(ctx),
+        )
+    };
+    let output = frame(&mut app, 0.0, vec![]);
+    let source = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == app.editor => Some(text),
+            _ => None,
+        })
+        .expect("source preview must be painted");
+    let key = app.editor.find("json_status").unwrap();
+    let character = app.editor[..key + "json_statu".len()].chars().count();
+    let start = source
+        .galley
+        .pos_from_cursor(egui::text::CCursor::new(character));
+    let end = source
+        .galley
+        .pos_from_cursor(egui::text::CCursor::new(character + 1));
+    let position = source.pos + egui::vec2((start.left() + end.left()) * 0.5, start.center().y);
+    frame(
+        &mut app,
+        0.1,
+        vec![
+            egui::Event::PointerMoved(position),
+            egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    frame(
+        &mut app,
+        0.2,
+        vec![egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    let offset = app.source_caret_offset.expect("preview caret must move");
+    assert!(offset >= key && offset <= key + "json_status".len());
+    finish(
+        &mut app,
+        receiver.recv_timeout(Duration::from_secs(3)).unwrap(),
+    );
+    assert_eq!(app.pointer, "/controls/json_status");
+}
+
+#[test]
+fn clicking_the_right_compare_key_updates_its_own_complete_path() {
+    let mut app = ready_app();
+    app.view = View::Compare;
+    app.compare_text = "{\n  \"outer\": {\n    \"final_key\": 1\n  }\n}".into();
+    app.right_json_valid = true;
+    let (sender, receiver) = mpsc::channel();
+    app.jobs = sender.into();
+    let ctx = egui::Context::default();
+    ui::install_fonts(&ctx);
+    ui::configure(&ctx, false);
+    let frame = |app: &mut App, time, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.workspace(ctx),
+        )
+    };
+    let output = frame(&mut app, 0.0, vec![]);
+    let source = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == app.compare_text => Some(text),
+            _ => None,
+        })
+        .expect("right editor must be painted");
+    let key = app.compare_text.find("final_key").unwrap();
+    let character = app.compare_text[..key + "final_ke".len()].chars().count();
+    let start = source
+        .galley
+        .pos_from_cursor(egui::text::CCursor::new(character));
+    let end = source
+        .galley
+        .pos_from_cursor(egui::text::CCursor::new(character + 1));
+    let position = source.pos + egui::vec2((start.left() + end.left()) * 0.5, start.center().y);
+    frame(
+        &mut app,
+        0.1,
+        vec![
+            egui::Event::PointerMoved(position),
+            egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    frame(
+        &mut app,
+        0.2,
+        vec![egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
+    finish(
+        &mut app,
+        receiver.recv_timeout(Duration::from_secs(3)).unwrap(),
+    );
+    assert_eq!(app.right_pointer, "/outer/final_key");
+    let output = frame(&mut app, 0.3, vec![]);
+    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+        egui::Shape::Text(text) if text.galley.job.text == "~ > outer > final_key" && text.pos.x > 640.0)));
+}
+
+#[test]
 fn mode_divider_aligns_with_editor_split_when_resized_or_dragged() {
     let mut app = ready_app();
     let ctx = egui::Context::default();

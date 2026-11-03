@@ -79,6 +79,7 @@ enum RemoteJob {
     Transform(DocRef, Format),
     Locate(DocRef, String),
     SourcePointer(DocRef, usize),
+    RightSourcePointer(Arc<String>, usize),
     FocusGraph(DocRef, String),
     Inspect(DocRef, String),
     Edit(DocRef, String, String, bool),
@@ -95,6 +96,9 @@ impl RemoteJob {
             Job::Locate(doc, pointer) => Self::Locate(DocRef::new(doc, force), pointer.clone()),
             Job::SourcePointer(doc, offset) => {
                 Self::SourcePointer(DocRef::new(doc, force), *offset)
+            }
+            Job::RightSourcePointer(text, offset) => {
+                Self::RightSourcePointer(text.clone(), *offset)
             }
             Job::FocusGraph(doc, pointer) => {
                 Self::FocusGraph(DocRef::new(doc, force), pointer.clone())
@@ -124,6 +128,7 @@ impl RemoteJob {
             }
             Self::Locate(doc, pointer) => Job::Locate(doc.resolve()?.0, pointer),
             Self::SourcePointer(doc, offset) => Job::SourcePointer(doc.resolve()?.0, offset),
+            Self::RightSourcePointer(text, offset) => Job::RightSourcePointer(text, offset),
             Self::FocusGraph(doc, pointer) => Job::FocusGraph(doc.resolve()?.0, pointer),
             Self::Inspect(doc, pointer) => Job::Inspect(doc.resolve()?.0, pointer),
             Self::Edit(doc, pointer, replacement, rename) => {
@@ -167,7 +172,8 @@ enum Reply {
         Option<std::ops::Range<usize>>,
     ),
     Located(std::ops::Range<usize>),
-    SourcePointer(Option<String>),
+    SourcePointer(usize, Option<String>),
+    RightSourcePointer(usize, Option<String>),
     FocusedGraph(Arc<Graph>, String),
     Editing(crate::ui::EditDialog),
 }
@@ -261,7 +267,8 @@ fn process_request(bytes: &[u8]) -> Result<Vec<u8>, String> {
         Output::RightText(text) => Reply::RightText(text),
         Output::DiffLocation(left, right) => Reply::DiffLocation(left, right),
         Output::Located(range) => Reply::Located(range),
-        Output::SourcePointer(pointer) => Reply::SourcePointer(pointer),
+        Output::SourcePointer(offset, pointer) => Reply::SourcePointer(offset, pointer),
+        Output::RightSourcePointer(offset, pointer) => Reply::RightSourcePointer(offset, pointer),
         Output::FocusedGraph(graph, pointer) => Reply::FocusedGraph(graph, pointer),
         Output::Editing(dialog) => Reply::Editing(dialog),
     });
@@ -324,7 +331,10 @@ impl crate::worker::Task<Completed> for Work {
                 Reply::RightText(text) => Output::RightText(text),
                 Reply::DiffLocation(left, right) => Output::DiffLocation(left, right),
                 Reply::Located(range) => Output::Located(range),
-                Reply::SourcePointer(pointer) => Output::SourcePointer(pointer),
+                Reply::SourcePointer(offset, pointer) => Output::SourcePointer(offset, pointer),
+                Reply::RightSourcePointer(offset, pointer) => {
+                    Output::RightSourcePointer(offset, pointer)
+                }
                 Reply::FocusedGraph(graph, pointer) => Output::FocusedGraph(graph, pointer),
                 Reply::Editing(dialog) => Output::Editing(dialog),
             })

@@ -1,21 +1,44 @@
 # DEBUG performance logs
 
 Logs connect each queued job to its processing stages using `job=<id>`.
-They show which parser ran, whether formatting reused a graph, and where time
-was spent. They contain sizes, counts and operation labels, without document
-contents, property values or filenames. DEBUG is disabled by default.
+They show which parser ran, whether formatting reused a graph, where time was
+spent, and the caret → source offset → JSON pointer → Path/Graph sequence. They
+contain sizes, offsets, JSON pointers and operation labels, without document
+values or filenames. Debug builds automatically enable only the low-volume
+navigation trace; high-frequency timing logs remain opt-in.
 
 ## Enable
 
-Native logs go to stderr:
+Native debug builds truncate `forma-debug.log` at startup and write only
+caret/Path/Graph navigation events there:
+
+```sh
+cargo run
+tail -f forma-debug.log
+```
+
+Set `FORMA_LOG_FILE=/path/to/file` to choose another local file. To additionally
+enable the full timing stream in a release or debug build:
 
 ```sh
 FORMA_LOG=debug cargo run --release --locked 2> debug.log
 ```
 
-Browser: open the app with `?debug=1`, then open DevTools Console and enable
-**Verbose**. Save the Console output to a local file for analysis. Reload
-without the query parameter to disable DEBUG.
+Browser debug builds log the low-volume navigation trace automatically. For a
+release build, open the app with `?debug=1`, then open DevTools Console and enable **Verbose**. Save the Console
+output to a local file for analysis. Reload without the query parameter to
+disable DEBUG in release builds.
+
+For local Web debugging that an agent can monitor directly, use:
+
+```sh
+python3 scripts/debug-web.py
+tail -f forma-debug.log
+```
+
+The helper binds a log sink to loopback port `8081`, starts `trunk serve` on its
+configured port, and writes only the low-volume navigation trace. It does not
+receive JSON contents or property values.
 
 Example fields:
 
@@ -53,6 +76,9 @@ from UI layout and message handling. The analyzer groups stages by realm.
 | `parser_path` | Sonic versus serde; small input, parse failure or unsupported conversion |
 | `transform`, `serialize` | Sort/Expand and JSON output generation |
 | `graph_build`, `graph_cache` | Graph construction versus reuse |
+| `source_caret`, `source_pointer_queued`, `source_pointer_resolved` | Caret byte offset and the pointer lookup lifecycle |
+| `source_pointer_result`, `path_updated` | Stale-result rejection and the Path that was actually applied |
+| `focused_graph_queued`, `focused_graph_result` | Local Graph request and whether its result still matched the active Path |
 | `compare_walk`, `compare_alignment` | Finding value differences and aligning text rows |
 | `search_text`, `search_tree` | Source and graph search |
 | `search_highlights` | Main-thread visible-match painting and row indexing |

@@ -154,6 +154,9 @@ impl App {
                 let offset = (self.view == View::Compare).then_some(self.compare_scroll);
                 let syntax_error = self.syntax_error.clone();
                 let typography = self.editor_typography;
+                if self.search.jump || self.error_jump == Some(false) || self.compare_jump {
+                    expand_editor_folds(ui.ctx(), egui::Id::new("forma_source"));
+                }
                 let scroll = editor_scroll(
                     ui,
                     EditorViewport {
@@ -177,7 +180,7 @@ impl App {
                         let wrap_width = if self.view == View::Compare {
                             (ui.ctx().content_rect().width()
                                 * self.split_ratio.min(1.0 - self.split_ratio)
-                                - 104.0)
+                                - 120.0)
                                 .max(80.0)
                         } else {
                             ui.available_width().max(80.0)
@@ -192,14 +195,15 @@ impl App {
                                     wrap_width,
                                     typography,
                                 );
-                                self.code.align(
+                                let galley = self.code.align(
                                     ui,
                                     galley,
                                     alignment.as_ref(),
                                     true,
                                     &self.compare_text,
                                     wrap_width,
-                                )
+                                );
+                                fold_galley(ui, egui::Id::new("forma_source"), galley, alignment.as_deref(), true)
                             };
                         let indentation_changed =
                             editable && prepare_code_input(ui, "json_source", &mut self.editor);
@@ -234,6 +238,7 @@ impl App {
                         if output.response.changed() {
                             self.reset_sort_state();
                             self.syntax_error = None;
+                            self.pointer.clear();
                             self.revision += 1;
                             self.clear_comparison();
                             self.auto_due = Some(
@@ -244,6 +249,7 @@ impl App {
                             self.source_target = None;
                             self.pending_reveal = None;
                             self.pending_source_offset = None;
+                            self.source_caret_offset = None;
                             self.canvas.edit_requested = None;
                             self.dirty = true;
                             self.search_source = Arc::new(self.editor.clone());
@@ -251,37 +257,55 @@ impl App {
                             self.search.tree.changed();
                             self.search.jump = false;
                         }
-                        let source_clicked = ui.input(|input| {
-                            input.pointer.button_clicked(egui::PointerButton::Primary)
-                                && input.pointer.interact_pos().is_some_and(|mouse| {
-                                    output.text_clip_rect.contains(mouse)
-                                        && output.response.rect.contains(mouse)
-                                })
-                        }) && ui.rect_contains_pointer(output.text_clip_rect);
-                        if self.view == View::Graph
-                            && (output.response.clicked()
-                                || source_clicked
-                                || (!editable
-                                    && ui
-                                        .interact(
-                                            output.response.rect.intersect(output.text_clip_rect),
-                                            output.response.id.with("preview_click"),
-                                            egui::Sense::click(),
-                                        )
-                                        .clicked()))
+                        let preview_click = if !self.editable {
+                            let response = ui.interact(
+                                output.response.rect.intersect(output.text_clip_rect),
+                                output.response.id.with("preview_caret"),
+                                egui::Sense::click(),
+                            );
+                            if response.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+                            }
+                            response
+                                .clicked_by(egui::PointerButton::Primary)
+                                .then(|| ui.input(|input| input.pointer.interact_pos()))
+                                .flatten()
+                        } else {
+                            None
+                        };
+                        let caret = if output.response.has_focus() {
+                            caret_source_offset(&output, &self.editor)
+                        } else {
+                            preview_click.map(|mouse| {
+                                pointer_source_offset(&output, &self.editor, mouse)
+                            })
+                        };
+                        if matches!(self.view, View::Graph | View::Compare)
                             && !output.response.changed()
-                            && let Some(mouse) = ui.input(|input| input.pointer.interact_pos())
+                            && let Some(offset) = caret
                         {
-                            let cursor = output.galley.cursor_from_pos(mouse - output.galley_pos);
-                            let offset = self
-                                .editor
-                                .char_indices()
-                                .nth(cursor.index)
-                                .map_or(self.editor.len(), |(offset, _)| offset);
-                            self.pending_source_offset = Some(self.preview_start + offset);
-                            log::debug!(target: "forma", "event=source_graph_click bytes={} offset={}", self.full_text.len(), self.preview_start + offset);
-                            self.source_target = None;
-                            self.pending_reveal = None;
+                            let offset = self.preview_start + offset;
+                            if self.source_caret_offset != Some(offset) {
+                                self.source_caret_offset = Some(offset);
+                                self.pending_source_offset = Some(offset);
+                                forma::diagnostics::navigation(format_args!("event=source_caret bytes={} preview_start={} local_offset={} absolute_offset={} current_pointer={:?}", self.full_text.len(), self.preview_start, offset - self.preview_start, offset, self.pointer));
+                                self.source_target = None;
+                                self.pending_reveal = None;
+                            }
+                        }
+                        if !self.editable
+                            && let Some(offset) = self.source_caret_offset
+                            && offset >= self.preview_start
+                            && offset <= self.preview_start + self.editor.len()
+                        {
+                            let local = offset - self.preview_start;
+                            let character = self.editor[..local].chars().count();
+                            paint_readonly_caret(
+                                ui,
+                                &output,
+                                character,
+                                typography.line_height,
+                            );
                         }
                         if self.search.jump {
                             if let Some(range) = self.source_target.as_ref().or_else(|| {

@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum View {
     Graph,
     Compare,
@@ -73,6 +73,7 @@ pub(crate) struct App {
     pub(crate) compare_right_range: Option<std::ops::Range<usize>>,
     pub(crate) compare_jump: bool,
     pub(crate) pointer: String,
+    pub(crate) right_pointer: String,
     pub(crate) differences: Vec<Difference>,
     pub(crate) comparison_done: bool,
     #[cfg(target_arch = "wasm32")]
@@ -84,6 +85,9 @@ pub(crate) struct App {
     pub(crate) automatic_job: bool,
     pub(crate) pending_reveal: Option<String>,
     pub(crate) pending_source_offset: Option<usize>,
+    pub(crate) pending_right_source_offset: Option<usize>,
+    pub(crate) source_caret_offset: Option<usize>,
+    pub(crate) right_caret_offset: Option<usize>,
     pub(crate) source_target: Option<std::ops::Range<usize>>,
     pub(crate) edit_dialog: Option<ui::EditDialog>,
     pub(crate) feedback: Option<ui::feedback::Feedback>,

@@ -8,6 +8,42 @@
     <link data-trunk rel="copy-file" href="packaging/forma.svg" />
     <link data-trunk rel="copy-file" href="packaging/forma-worker.js" />
     <link rel="icon" type="image/svg+xml" href="forma.svg?v=3" />
+    <script>
+      (() => {
+        let reported = false;
+        const reportStartupFailure = (detail) => {
+          if (reported) return;
+          reported = true;
+          const message = `[Forma STARTUP] ${detail}`;
+          console.error(message);
+
+          const loading = document.getElementById("loading");
+          if (loading) {
+            loading.textContent = message;
+            loading.style.whiteSpace = "pre-wrap";
+            loading.style.maxWidth = "min(90vw, 960px)";
+            loading.style.textAlign = "left";
+          }
+
+          fetch(`http://127.0.0.1:8081/log?message=${encodeURIComponent(message)}`, {
+            mode: "no-cors",
+            cache: "no-store",
+          }).catch(() => {});
+        };
+
+        addEventListener("error", (event) => {
+          reportStartupFailure(event.error?.stack ?? event.message);
+        });
+        addEventListener("unhandledrejection", (event) => {
+          reportStartupFailure(event.reason?.stack ?? event.reason);
+        });
+
+        const timeout = setTimeout(() => {
+          reportStartupFailure("initialization timed out after 15 seconds");
+        }, 15_000);
+        addEventListener("TrunkApplicationStarted", () => clearTimeout(timeout), { once: true });
+      })();
+    </script>
     <link data-trunk rel="rust" data-bin="forma"
       data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int --enable-simd" />
     <style>
@@ -27,6 +63,7 @@
   </head>
   <body>
     <canvas id="forma" aria-label="Forma editor"></canvas>
+    <!-- Startup errors replace this status text and are mirrored to forma-debug.log. -->
     <div id="loading" role="status">Loading Forma…</div>
   </body>
 </html>

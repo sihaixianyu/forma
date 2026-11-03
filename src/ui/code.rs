@@ -5,7 +5,10 @@ pub(super) const EDITOR_LINE_HEIGHT: f32 = 20.0;
 
 // epaint accumulates unwrapped paragraph x coordinates as f32 before wrapping.
 // Millions of glyphs eventually stop advancing and collapse into one huge row.
-fn layout_bounded_job(ui: &egui::Ui, mut job: egui::text::LayoutJob) -> Arc<egui::Galley> {
+pub(super) fn layout_bounded_job(
+    ui: &egui::Ui,
+    mut job: egui::text::LayoutJob,
+) -> Arc<egui::Galley> {
     const CHUNK_BYTES: usize = 16 * 1024;
     if !job.text.split('\n').any(|line| line.len() > CHUNK_BYTES) {
         return ui.fonts_mut(|fonts| fonts.layout_job(job));
@@ -561,6 +564,9 @@ impl CodeCache {
             }
         }
         job.wrap.max_width = width;
+        // JSON strings (URLs, hashes, encoded payloads) are not prose: preferring
+        // punctuation breaks can strand an opening quote on a row of its own.
+        job.wrap.break_anywhere = true;
         let galley = layout_bounded_job(ui, job.clone());
         self.dark = dark;
         self.pixels_per_point = ui.ctx().pixels_per_point();

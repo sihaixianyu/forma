@@ -79,7 +79,8 @@ fn viewport_index_agrees_with_full_scan() {
 #[test]
 fn source_click_resolves_keys_values_containers_and_array_items() {
     use forma::edit::pointer_at_offset;
-    let text = r#" {"a/b~c":{"名字":"中文🚀"},"items":[{"id":1},false],"tail":null} "#;
+    let text =
+        " {\"a/b~c\": {\n   \"名字\": \"中文🚀\"},\"items\":[{\"id\":1},false],\"tail\":null} ";
     for (fragment, expected) in [
         ("a/b~c", "/a~1b~0c"),
         ("名字", "/a~1b~0c/名字"),
@@ -93,6 +94,16 @@ fn source_click_resolves_keys_values_containers_and_array_items() {
                 .unwrap()
                 .as_deref(),
             Some(expected)
+        );
+    }
+    let nested_key = text.find("名字").unwrap();
+    let nested_indent = text[..nested_key].rfind('\n').unwrap() + 1;
+    let nested_value = text.find("中文").unwrap();
+    for offset in nested_indent..nested_value {
+        assert_eq!(
+            pointer_at_offset(text, offset).unwrap().as_deref(),
+            Some("/a~1b~0c/名字"),
+            "the whole property header must resolve to its final key at byte {offset}"
         );
     }
     assert_eq!(
@@ -113,6 +124,30 @@ fn source_click_resolves_keys_values_containers_and_array_items() {
 }
 
 #[test]
+fn source_caret_assigns_comma_whitespace_by_line() {
+    use forma::edit::pointer_at_offset;
+    let text = "{\n  \"first\": 1,   \n    \"second\": 2\n}";
+    let comma = text.find(',').unwrap();
+    let newline = text[comma..].find('\n').unwrap() + comma;
+    let second = text.find("second").unwrap();
+
+    for offset in comma..newline {
+        assert_eq!(
+            pointer_at_offset(text, offset).unwrap().as_deref(),
+            Some("/first"),
+            "same-line whitespace after the comma belongs to the previous key"
+        );
+    }
+    for offset in newline + 1..second {
+        assert_eq!(
+            pointer_at_offset(text, offset).unwrap().as_deref(),
+            Some("/second"),
+            "indentation on the next line belongs to that line's key"
+        );
+    }
+}
+
+#[test]
 fn source_click_uses_absolute_offsets_in_a_large_document() {
     use forma::edit::pointer_at_offset;
     let text = format!(
@@ -125,4 +160,30 @@ fn source_click_uses_absolute_offsets_in_a_large_document() {
             .as_deref(),
         Some("/target/name")
     );
+}
+
+#[test]
+fn source_caret_keeps_the_deep_property_at_value_boundaries() {
+    use forma::edit::pointer_at_offset;
+    let text = r#"{
+  "transparent_param": {
+    "people_hit_result": {
+      "before": "中文",
+      "dmp_18_user_ecom_8group": "新锐白领",
+      "after": true
+    }
+  }
+}"#;
+    let pointer = "/transparent_param/people_hit_result/dmp_18_user_ecom_8group";
+    let key = text.find("dmp_18_user_ecom_8group").unwrap();
+    let value = text.find("新锐白领").unwrap();
+    let value_end = value + "新锐白领".len() + 1;
+
+    for offset in key..=value_end {
+        assert_eq!(
+            pointer_at_offset(text, offset).unwrap().as_deref(),
+            Some(pointer),
+            "caret boundary at byte {offset} must retain the deepest property"
+        );
+    }
 }

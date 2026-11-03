@@ -1,5 +1,92 @@
 use super::*;
 
+// Draw the symbols geometrically so font bearings cannot shift them off-center.
+fn search_icon_button(ui: &mut egui::Ui, direction: i8) -> egui::Response {
+    let response = ui.add_sized(
+        Vec2::new(22.0, 20.0),
+        egui::Button::new("").frame(true).corner_radius(5),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            response.enabled(),
+            match direction {
+                0 => "Close search",
+                1 => "Next result",
+                _ => "Previous result",
+            },
+        )
+    });
+    let center = response.rect.center();
+    let stroke = Stroke::new(1.25_f32, ui.style().interact(&response).fg_stroke.color);
+    let painter = ui.painter();
+    if direction == 0 {
+        for sign in [-1.0, 1.0] {
+            painter.line_segment(
+                [
+                    center + Vec2::new(-3.0, -3.0 * sign),
+                    center + Vec2::new(3.0, 3.0 * sign),
+                ],
+                stroke,
+            );
+        }
+    } else {
+        let x = 2.0 * f32::from(direction);
+        painter.add(egui::Shape::line(
+            vec![
+                center + Vec2::new(-x, -4.0),
+                center + Vec2::new(x, 0.0),
+                center + Vec2::new(-x, 4.0),
+            ],
+            stroke,
+        ));
+    }
+    response
+}
+
+fn search_buttons(ui: &mut egui::Ui, count: usize) -> (bool, bool, bool) {
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.spacing_mut().button_padding = Vec2::new(4.0, 2.0);
+        ui.spacing_mut().interact_size.y = 20.0;
+        ui.add_space(10.0);
+        let close = search_icon_button(ui, 0)
+            .on_hover_text("Close search · Escape")
+            .clicked();
+        let next = ui
+            .add_enabled_ui(count > 0, |ui| search_icon_button(ui, 1))
+            .inner
+            .on_hover_text("Next result · Enter")
+            .clicked();
+        let previous = ui
+            .add_enabled_ui(count > 0, |ui| search_icon_button(ui, -1))
+            .inner
+            .on_hover_text("Previous result · Shift+Enter")
+            .clicked();
+        (previous, next, close)
+    })
+    .inner
+}
+
+// Reserve the measured count plus compact controls before sizing the query field.
+fn search_input_width(ui: &egui::Ui, selected: usize, stored: usize, total: usize) -> f32 {
+    let count_width = ui
+        .fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap(
+                    match_count(selected, stored, total),
+                    FontId::proportional(11.0),
+                    Color32::WHITE,
+                )
+                .size()
+                .x
+        })
+        .max(20.0);
+    let controls_width = 3.0 * 22.0 + 2.0 * 4.0 + 10.0;
+    (ui.available_width() - count_width - controls_width - 2.0 * ui.spacing().item_spacing.x - 8.0)
+        .max(0.0)
+}
+
 impl App {
     pub(crate) fn reset_search(&mut self) {
         self.source_target = None;
@@ -38,11 +125,17 @@ impl App {
             return;
         }
         ui.horizontal(|ui| {
+            ui.add_space(10.0);
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.search.text.query)
                     .id_salt("text_find")
                     .hint_text("Find in text…")
-                    .desired_width((ui.available_width() - 155.0).max(70.0)),
+                    .desired_width(search_input_width(
+                        ui,
+                        self.search.text.selected,
+                        self.search.text.matches.ranges.len(),
+                        self.search.text.matches.total,
+                    )),
             );
             if self.search.text.focus {
                 response.request_focus();
@@ -70,31 +163,18 @@ impl App {
             if enter {
                 response.request_focus();
             }
-            if ui
-                .add_enabled(count > 0, egui::Button::new("<").frame(false))
-                .on_hover_text("Previous match · Shift+Enter")
-                .clicked()
-                || (enter && ui.input(|i| i.modifiers.shift))
-            {
+            let (previous, next, close) = search_buttons(ui, count);
+            if previous || (enter && ui.input(|i| i.modifiers.shift)) {
                 self.search.text.next(count, true);
                 self.source_target = None;
                 self.search.jump = true;
             }
-            if ui
-                .add_enabled(count > 0, egui::Button::new(">").frame(false))
-                .on_hover_text("Next match · Enter")
-                .clicked()
-                || (enter && !ui.input(|i| i.modifiers.shift))
-            {
+            if next || (enter && !ui.input(|i| i.modifiers.shift)) {
                 self.search.text.next(count, false);
                 self.source_target = None;
                 self.search.jump = true;
             }
-            if ui
-                .add(egui::Button::new("×").frame(false))
-                .on_hover_text("Close search · Escape")
-                .clicked()
-            {
+            if close {
                 self.search.text.close();
                 self.search.jump = false;
             }
@@ -117,11 +197,17 @@ impl App {
             return;
         }
         ui.horizontal(|ui| {
+            ui.add_space(10.0);
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.search.tree.query)
                     .id_salt("tree_find")
                     .hint_text("Find a key or value…")
-                    .desired_width((ui.available_width() - 155.0).max(70.0)),
+                    .desired_width(search_input_width(
+                        ui,
+                        self.search.tree.selected,
+                        self.search.tree.matches.hits.len(),
+                        self.search.tree.matches.total,
+                    )),
             );
             if self.search.tree.focus {
                 response.request_focus();
@@ -148,14 +234,7 @@ impl App {
             if enter {
                 response.request_focus();
             }
-            let previous = ui
-                .add_enabled(count > 0, egui::Button::new("<").frame(false))
-                .on_hover_text("Previous result")
-                .clicked();
-            let next = ui
-                .add_enabled(count > 0, egui::Button::new(">").frame(false))
-                .on_hover_text("Next result")
-                .clicked();
+            let (previous, next, close) = search_buttons(ui, count);
             if previous || next || enter {
                 self.search.tree.next(
                     count,
@@ -167,11 +246,7 @@ impl App {
                     self.canvas.focus(self.pointer.clone());
                 }
             }
-            if ui
-                .add(egui::Button::new("×").frame(false))
-                .on_hover_text("Close search · Escape")
-                .clicked()
-            {
+            if close {
                 self.search.tree.close();
             }
         });
@@ -233,11 +308,17 @@ impl App {
             return;
         }
         ui.horizontal(|ui| {
+            ui.add_space(10.0);
             let response = ui.add(
                 egui::TextEdit::singleline(&mut self.search.right.query)
                     .id_salt("right_find")
                     .hint_text("Find in right text…")
-                    .desired_width((ui.available_width() - 155.0).max(70.0)),
+                    .desired_width(search_input_width(
+                        ui,
+                        self.search.right.selected,
+                        self.search.right.matches.ranges.len(),
+                        self.search.right.matches.total,
+                    )),
             );
             if self.search.right.focus {
                 response.request_focus();
@@ -265,27 +346,16 @@ impl App {
             if enter {
                 response.request_focus();
             }
-            if ui
-                .add_enabled(count > 0, egui::Button::new("<").frame(false))
-                .clicked()
-                || (enter && ui.input(|input| input.modifiers.shift))
-            {
+            let (previous, next, close) = search_buttons(ui, count);
+            if previous || (enter && ui.input(|input| input.modifiers.shift)) {
                 self.search.right.next(count, true);
                 self.search.right_jump = true;
             }
-            if ui
-                .add_enabled(count > 0, egui::Button::new(">").frame(false))
-                .clicked()
-                || (enter && !ui.input(|input| input.modifiers.shift))
-            {
+            if next || (enter && !ui.input(|input| input.modifiers.shift)) {
                 self.search.right.next(count, false);
                 self.search.right_jump = true;
             }
-            if ui
-                .add(egui::Button::new("×").frame(false))
-                .on_hover_text("Close search · Escape")
-                .clicked()
-            {
+            if close {
                 self.search.right.close();
                 self.search.right_jump = false;
             }

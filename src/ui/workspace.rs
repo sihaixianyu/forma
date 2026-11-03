@@ -206,9 +206,21 @@ impl App {
             && let Some(doc) = self.document.clone()
         {
             self.pending_reveal = None;
-            if self.view == View::Graph {
+            if matches!(self.view, View::Graph | View::Compare) {
+                forma::diagnostics::navigation(format_args!(
+                    "event=source_pointer_queued side=left offset={} caret_offset={:?} view={:?}",
+                    offset, self.source_caret_offset, self.view
+                ));
                 self.start(Job::SourcePointer(doc, offset), false);
             }
+        }
+        if !self.busy
+            && let Some(offset) = self.pending_right_source_offset.take()
+        {
+            self.start(
+                Job::RightSourcePointer(Arc::new(self.compare_text.clone()), offset),
+                false,
+            );
         }
         if !self.busy
             && !self.dirty
@@ -363,13 +375,22 @@ impl App {
         }
     }
 
-    pub(super) fn path_bar(&self, ui: &mut egui::Ui, p: Palette) {
-        let pointer = if self.view == View::Compare {
+    pub(super) fn path_bar(&self, ui: &mut egui::Ui, p: Palette, right_input: bool) {
+        let difference = || {
             self.differences
                 .get(self.compare_selected)
-                .map_or(self.pointer.as_str(), |difference| {
-                    difference.pointer.as_str()
-                })
+                .map(|difference| difference.pointer.as_str())
+        };
+        let pointer = if self.view == View::Compare && right_input {
+            (!self.right_pointer.is_empty())
+                .then_some(self.right_pointer.as_str())
+                .or_else(difference)
+                .unwrap_or("")
+        } else if self.view == View::Compare {
+            (!self.pointer.is_empty())
+                .then_some(self.pointer.as_str())
+                .or_else(difference)
+                .unwrap_or("")
         } else {
             &self.pointer
         };
@@ -459,7 +480,7 @@ impl App {
             );
             pane.set_clip_rect(rect.intersect(ui.clip_rect()));
             pane.spacing_mut().interact_size.y = 20.0;
-            self.path_bar(&mut pane, p);
+            self.path_bar(&mut pane, p, right_input);
             let mut status_ui = ui.new_child(
                 egui::UiBuilder::new()
                     .id_salt((id, "status"))
@@ -573,6 +594,11 @@ impl App {
                         && pointer_valid
                         && !self.graph.covers_pointer(&self.pointer)
                     {
+                        forma::diagnostics::navigation(format_args!(
+                            "event=focused_graph_queued pointer={:?} nodes={}",
+                            self.pointer,
+                            self.graph.nodes.len()
+                        ));
                         self.start(Job::FocusGraph(doc, self.pointer.clone()), false);
                     }
                     if !self.busy

@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn long_json_tokens_fill_wrapped_rows_instead_of_stranding_the_opening_quote() {
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let text = format!("\"{}\"", "abcdef0123456789".repeat(80));
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            for width in [80.0, 180.0, 320.0] {
+                let galley = CodeCache::default().layout_width(ui, &text, false, "", width);
+                for row in &galley.rows[..galley.rows.len() - 1] {
+                    assert!(row.glyphs.len() > 1);
+                    assert!(row.size.x > width * 0.8);
+                    assert!(row.size.x <= width + 1.0);
+                }
+                let rendered: String = galley
+                    .rows
+                    .iter()
+                    .flat_map(|row| row.glyphs.iter().map(|glyph| glyph.chr))
+                    .collect();
+                assert_eq!(rendered, text);
+            }
+        });
+    });
+}
+
+#[test]
 fn typography_clamps_to_supported_ranges_and_rebuilds_layouts() {
     assert_eq!(
         EditorTypography::default(),

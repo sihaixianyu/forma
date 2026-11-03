@@ -2,7 +2,7 @@ use crate::{Document, Format, process};
 use serde_json::{Value, value::RawValue};
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
-fn property_start(text: &str, value_start: usize) -> Option<usize> {
+pub(super) fn property_start(text: &str, value_start: usize) -> Option<usize> {
     let bytes = text.as_bytes();
     let mut end = value_start;
     while end > 0 && bytes[end - 1].is_ascii_whitespace() {
@@ -27,6 +27,9 @@ fn property_start(text: &str, value_start: usize) -> Option<usize> {
                 escaped -= 1;
             }
             if (start - escaped).is_multiple_of(2) {
+                while start > 0 && matches!(bytes[start - 1], b' ' | b'\t' | b'\r') {
+                    start -= 1;
+                }
                 return Some(start);
             }
         }
@@ -44,6 +47,12 @@ pub fn pointer_at_offset(text: &str, offset: usize) -> Result<Option<String>, St
         let start = raw.get().as_ptr() as usize - text.as_ptr() as usize;
         start..start + raw.get().len()
     }
+    fn contains_caret(text: &str, range: &Range<usize>, offset: usize) -> bool {
+        range.start <= offset
+            && (offset < range.end
+                || (offset == range.end
+                    && !matches!(text.as_bytes().get(offset), Some(b']' | b'}'))))
+    }
     fn descend(
         text: &str,
         raw: &RawValue,
@@ -54,15 +63,29 @@ pub fn pointer_at_offset(text: &str, offset: usize) -> Result<Option<String>, St
             Some(b'{') => {
                 let map: HashMap<String, &RawValue> =
                     serde_json::from_str(raw.get()).map_err(|e| e.to_string())?;
-                for (key, child) in map {
-                    let range = range(text, child);
-                    let bound = property_start(text, range.start).unwrap_or(range.start);
-                    if bound <= offset && offset < range.end {
-                        let pointer = crate::pointer_child(&pointer, &key);
+                let mut properties: Vec<_> = map
+                    .into_iter()
+                    .map(|(key, child)| {
+                        let range = range(text, child);
+                        let bound = property_start(text, range.start).unwrap_or(range.start);
+                        (bound, range, key, child)
+                    })
+                    .collect();
+                properties.sort_unstable_by_key(|(bound, ..)| *bound);
+                let object_end = range(text, raw).end.saturating_sub(1);
+                for (index, (bound, range, key, child)) in properties.iter().enumerate() {
+                    let property_end = properties
+                        .get(index + 1)
+                        .map_or(object_end, |(next_bound, ..)| *next_bound);
+                    if *bound <= offset && offset < property_end {
+                        let pointer = crate::pointer_child(&pointer, key);
                         if offset < range.start {
                             return Ok(pointer);
                         }
-                        return descend(text, child, offset, pointer);
+                        if offset <= range.end {
+                            return descend(text, child, offset, pointer);
+                        }
+                        return Ok(pointer);
                     }
                 }
             }
@@ -71,7 +94,7 @@ pub fn pointer_at_offset(text: &str, offset: usize) -> Result<Option<String>, St
                     serde_json::from_str(raw.get()).map_err(|e| e.to_string())?;
                 for (index, child) in array.iter().enumerate() {
                     let range = range(text, child);
-                    if range.start <= offset && offset < range.end {
+                    if contains_caret(text, &range, offset) {
                         return descend(
                             text,
                             child,

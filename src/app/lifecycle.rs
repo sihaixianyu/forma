@@ -95,6 +95,7 @@ impl App {
             compare_right_range: None,
             compare_jump: false,
             pointer: String::new(),
+            right_pointer: String::new(),
             differences: Vec::new(),
             comparison_done: false,
             #[cfg(target_arch = "wasm32")]
@@ -106,6 +107,9 @@ impl App {
             automatic_job: false,
             pending_reveal: None,
             pending_source_offset: None,
+            pending_right_source_offset: None,
+            source_caret_offset: None,
+            right_caret_offset: None,
             source_target: None,
             edit_dialog: None,
             feedback: None,
@@ -276,6 +280,10 @@ impl App {
                     }
                     self.differences = diffs;
                     self.compare_selected = 0;
+                    if let Some(difference) = self.differences.first() {
+                        self.pointer.clone_from(&difference.pointer);
+                        self.right_pointer.clone_from(&difference.pointer);
+                    }
                     if done.user_action {
                         self.apply_diff_location(left, right);
                         self.view = View::Compare;
@@ -325,18 +333,47 @@ impl App {
                     self.source_target = Some(range);
                     self.search.jump = true;
                 }
-                Ok(Output::SourcePointer(pointer)) => {
-                    if self.view == View::Graph
-                        && self.pending_source_offset.is_none()
-                        && let Some(pointer) = pointer
-                    {
+                Ok(Output::SourcePointer(offset, pointer)) => {
+                    let accepted = self.source_caret_offset == Some(offset);
+                    forma::diagnostics::navigation(format_args!(
+                        "event=source_pointer_result side=left offset={} current_offset={:?} pointer={:?} accepted={}",
+                        offset, self.source_caret_offset, pointer, accepted
+                    ));
+                    if accepted && let Some(pointer) = pointer {
                         self.pointer = pointer.clone();
-                        self.view = View::Graph;
-                        self.canvas.focus(pointer);
+                        forma::diagnostics::navigation(format_args!(
+                            "event=path_updated side=left pointer={:?} view={:?}",
+                            pointer, self.view
+                        ));
+                        if self.view == View::Graph {
+                            self.canvas.focus(pointer);
+                        }
+                    }
+                }
+                Ok(Output::RightSourcePointer(offset, pointer)) => {
+                    let accepted = self.right_caret_offset == Some(offset);
+                    forma::diagnostics::navigation(format_args!(
+                        "event=source_pointer_result side=right offset={} current_offset={:?} pointer={:?} accepted={}",
+                        offset, self.right_caret_offset, pointer, accepted
+                    ));
+                    if accepted && let Some(pointer) = pointer {
+                        forma::diagnostics::navigation(format_args!(
+                            "event=path_updated side=right pointer={:?} view={:?}",
+                            pointer, self.view
+                        ));
+                        self.right_pointer = pointer;
                     }
                 }
                 Ok(Output::FocusedGraph(graph, pointer)) => {
-                    if self.view == View::Graph && self.pointer == pointer {
+                    let accepted = self.view == View::Graph && self.pointer == pointer;
+                    forma::diagnostics::navigation(format_args!(
+                        "event=focused_graph_result pointer={:?} current_pointer={:?} nodes={} accepted={}",
+                        pointer,
+                        self.pointer,
+                        graph.nodes.len(),
+                        accepted
+                    ));
+                    if accepted {
                         self.canvas.reconcile(&self.graph, &graph);
                         self.graph = graph;
                         self.canvas.focus(pointer);
@@ -345,6 +382,7 @@ impl App {
                 Ok(Output::RightText(text)) => {
                     self.right_syntax_error = None;
                     self.right_json_valid = true;
+                    self.right_pointer.clear();
                     self.compare_text = (*text).clone();
                     self.search.right.changed();
                     self.clear_comparison();

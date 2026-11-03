@@ -304,6 +304,7 @@ impl App {
             Job::Locate(..)
                 | Job::Inspect(..)
                 | Job::SourcePointer(..)
+                | Job::RightSourcePointer(..)
                 | Job::LocateDiff(..)
                 | Job::FocusGraph(..)
         );

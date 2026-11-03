@@ -199,6 +199,35 @@ fn clicking_a_value_selects_its_exact_pointer() {
 }
 
 #[test]
+fn clicking_a_key_selects_its_exact_pointer() {
+    let ctx = egui::Context::default();
+    let graph = build_graph(&json!({"child":{"name":"example"}}));
+    let mut canvas = Canvas::default();
+    let mut pointer = String::new();
+    frame(&ctx, &mut canvas, &graph, &mut pointer, 0.0, vec![]);
+    let node = &graph.nodes[1];
+    let position =
+        canvas.last_rect.min + canvas.pan + Vec2::new(node.x + 40.0, node.y + 64.0) * canvas.zoom;
+    frame(
+        &ctx,
+        &mut canvas,
+        &graph,
+        &mut pointer,
+        0.1,
+        vec![egui::Event::PointerMoved(position), button(position, true)],
+    );
+    frame(
+        &ctx,
+        &mut canvas,
+        &graph,
+        &mut pointer,
+        0.2,
+        vec![button(position, false)],
+    );
+    assert_eq!(pointer, "/child/name");
+}
+
+#[test]
 fn selected_bottom_row_stays_beneath_the_node_outline() {
     let ctx = egui::Context::default();
     let graph = build_graph(&json!({"first": 1, "last": 2}));

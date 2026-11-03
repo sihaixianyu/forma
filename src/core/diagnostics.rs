@@ -1,11 +1,21 @@
 use log::{Level, LevelFilter, Log, Metadata, Record};
 use std::{
     cell::Cell,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-use web_time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
+use std::{
+    fs::{File, OpenOptions},
+    io::Write,
+    path::PathBuf,
+    sync::Mutex,
+};
+use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 static LOGGER: DebugLogger = DebugLogger;
+static NAVIGATION_LOG: AtomicBool = AtomicBool::new(false);
+#[cfg(not(target_arch = "wasm32"))]
+static LOG_FILE: Mutex<Option<File>> = Mutex::new(None);
 static NEXT_JOB: AtomicUsize = AtomicUsize::new(1);
 thread_local! { static JOB_ID: Cell<usize> = const { Cell::new(0) }; }
 
@@ -37,14 +47,24 @@ impl Log for DebugLogger {
             "native"
         };
         let text = format!(
-            "[Forma {}] job={} realm={} {}",
+            "[Forma {}] ts_ms={} job={} realm={} {}",
             record.level(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_millis()),
             job,
             realm,
             record.args()
         );
         #[cfg(not(target_arch = "wasm32"))]
-        eprintln!("{text}");
+        {
+            eprintln!("{text}");
+            if let Ok(mut file) = LOG_FILE.lock()
+                && let Some(file) = file.as_mut()
+            {
+                let _ = writeln!(file, "{text}");
+            }
+        }
         #[cfg(target_arch = "wasm32")]
         match record.level() {
             Level::Error => web_sys::console::error_1(&text.into()),
@@ -54,23 +74,108 @@ impl Log for DebugLogger {
         }
     }
 
-    fn flush(&self) {}
+    fn flush(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(mut file) = LOG_FILE.lock()
+            && let Some(file) = file.as_mut()
+        {
+            let _ = file.flush();
+        }
+    }
 }
 
-/// Native: FORMA_LOG=debug. Browser: ?debug=1 (Console verbose level).
+#[cfg(not(target_arch = "wasm32"))]
+fn initialize_file(debug: bool) -> Option<PathBuf> {
+    if !debug {
+        return None;
+    }
+    let path = std::env::var_os("FORMA_LOG_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("forma-debug.log"));
+    match OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&path)
+    {
+        Ok(file) => {
+            *LOG_FILE.lock().ok()? = Some(file);
+            Some(path)
+        }
+        Err(error) => {
+            eprintln!(
+                "Forma could not create debug log {}: {error}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// Debug builds record low-volume navigation diagnostics. Full timing logs remain opt-in.
 pub fn init() {
     #[cfg(not(target_arch = "wasm32"))]
     let debug = std::env::var("FORMA_LOG").is_ok_and(|value| value.eq_ignore_ascii_case("debug"));
     #[cfg(target_arch = "wasm32")]
-    let debug = web_sys::window()
+    let debug = web_debug_requested();
+    NAVIGATION_LOG.store(cfg!(debug_assertions) || debug, Ordering::Relaxed);
+    #[cfg(not(target_arch = "wasm32"))]
+    let file = initialize_file(NAVIGATION_LOG.load(Ordering::Relaxed));
+    configure(debug);
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(path) = file {
+        navigation(format_args!("event=debug_log_file path={path:?}"));
+    }
+    #[cfg(target_arch = "wasm32")]
+    navigation(format_args!("event=navigation_log_ready realm=main"));
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_debug_requested() -> bool {
+    web_sys::window()
         .and_then(|window| window.location().search().ok())
         .is_some_and(|query| {
             query
                 .trim_start_matches('?')
                 .split('&')
                 .any(|pair| pair == "debug=1")
-        });
-    configure(debug);
+        })
+}
+
+/// Low-volume caret/Path/Graph trace used to diagnose navigation races.
+pub fn navigation(args: std::fmt::Arguments<'_>) {
+    if !NAVIGATION_LOG.load(Ordering::Relaxed) {
+        return;
+    }
+    let text = format!(
+        "[Forma NAV] ts_ms={} job={} {}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis()),
+        JOB_ID.with(Cell::get),
+        args
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(mut file) = LOG_FILE.lock()
+        && let Some(file) = file.as_mut()
+    {
+        let _ = writeln!(file, "{text}");
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::debug_1(&text.clone().into());
+        if web_debug_requested()
+            && let Some(window) = web_sys::window()
+        {
+            let message =
+                percent_encoding::utf8_percent_encode(&text, percent_encoding::NON_ALPHANUMERIC);
+            let request =
+                window.fetch_with_str(&format!("http://127.0.0.1:8081/log?message={message}"));
+            wasm_bindgen_futures::spawn_local(async move {
+                let _ = wasm_bindgen_futures::JsFuture::from(request).await;
+            });
+        }
+    }
 }
 
 pub fn configure(debug: bool) {

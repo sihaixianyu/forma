@@ -6,6 +6,7 @@ pub(crate) enum Job {
     Transform(Arc<Document>, Format, Arc<forma::graph::Graph>),
     Locate(Arc<Document>, String),
     SourcePointer(Arc<Document>, usize),
+    RightSourcePointer(Arc<String>, usize),
     FocusGraph(Arc<Document>, String),
     Inspect(Arc<Document>, String),
     Edit(Arc<Document>, String, String, bool),
@@ -43,7 +44,7 @@ impl Job {
             Job::FormatRight(..) => "Format right JSON",
             Job::LocateDiff(..) => "Locate difference",
             Job::Locate(..) => "Locate source",
-            Job::SourcePointer(..) => "Locate graph node",
+            Job::SourcePointer(..) | Job::RightSourcePointer(..) => "Locate JSON path",
             Job::FocusGraph(..) => "Focus graph",
             Job::Inspect(..) => "Inspect node",
             Job::Edit(_, _, _, true) => "Rename property",
@@ -68,7 +69,8 @@ pub(crate) enum Output {
         Option<std::ops::Range<usize>>,
     ),
     Located(std::ops::Range<usize>),
-    SourcePointer(Option<String>),
+    SourcePointer(usize, Option<String>),
+    RightSourcePointer(usize, Option<String>),
     FocusedGraph(Arc<forma::graph::Graph>, String),
     Editing(ui::EditDialog),
 }
@@ -96,8 +98,8 @@ pub(crate) struct Completed {
 }
 
 pub(crate) fn diff_ranges(
-    left: &str,
-    right: &str,
+    left: &Arc<String>,
+    right: &Arc<String>,
     pointer: &str,
 ) -> (
     Option<std::ops::Range<usize>>,
@@ -105,8 +107,12 @@ pub(crate) fn diff_ranges(
 ) {
     let pointer = if pointer == "/ (root)" { "" } else { pointer };
     (
-        forma::edit::source_range(left, pointer).ok(),
-        forma::edit::source_range(right, pointer).ok(),
+        forma::source_index::cached(left)
+            .and_then(|index| index.source_range(pointer))
+            .ok(),
+        forma::source_index::cached(right)
+            .and_then(|index| index.source_range(pointer))
+            .ok(),
     )
 }
 
@@ -130,11 +136,24 @@ pub(crate) fn execute(job: Job) -> Result<Output, String> {
                 Ok(document_output(formatted))
             }
         }
-        Job::Locate(doc, pointer) => {
-            forma::edit::source_range(&doc.text, &pointer).map(Output::Located)
-        }
+        Job::Locate(doc, pointer) => forma::source_index::cached(&doc.text)?
+            .source_range(&pointer)
+            .map(Output::Located),
         Job::SourcePointer(doc, offset) => {
-            forma::edit::pointer_at_offset(&doc.text, offset).map(Output::SourcePointer)
+            let pointer = forma::source_index::cached(&doc.text)?.pointer_at_offset(offset)?;
+            forma::diagnostics::navigation(format_args!(
+                "event=source_pointer_resolved side=left offset={} pointer={:?}",
+                offset, pointer
+            ));
+            Ok(Output::SourcePointer(offset, pointer))
+        }
+        Job::RightSourcePointer(text, offset) => {
+            let pointer = forma::source_index::cached(&text)?.pointer_at_offset(offset)?;
+            forma::diagnostics::navigation(format_args!(
+                "event=source_pointer_resolved side=right offset={} pointer={:?}",
+                offset, pointer
+            ));
+            Ok(Output::RightSourcePointer(offset, pointer))
         }
         Job::FocusGraph(doc, pointer) => forma::graph::build_graph_at(&doc.value, &pointer)
             .map(|graph| Output::FocusedGraph(Arc::new(graph), pointer))

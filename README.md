@@ -34,6 +34,7 @@ features, controls, keyboard shortcuts, project links and run instructions from 
 - **Fast editing workflow:** Format, Minify, Expand JSON encoded in strings, and a three-state recursive Sort: click to cycle through original order, ascending, descending, and back to the exact original text. The Sort icon highlights the active direction. **Ctrl/Cmd + S** formats the active editor; **Ctrl/Cmd + Z** undoes, **Ctrl/Cmd + Shift + Z** or **Ctrl/Cmd + Y** redoes. Tab indents with two spaces. **Ctrl/Cmd + F** toggles search; **Ctrl/Cmd + wheel** zooms the graph.
 - **Active-line highlighting:** the focused editor highlights the current line, including wrapped rows, and accents its line number. Click a line number to move the caret to that line.
 - **Readable strings:** both editors wrap long lines automatically. Hover encoded strings for Base64, URL, Hex or nested JSON previews without changing the document.
+- **Code folding:** click the chevron beside a line number to fold or unfold a multiline object or array. Folding preserves the complete JSON and original line numbers; editing or jumping to a search result reveals the content again. Aligned comparison panes fold together.
 - **Syntax diagnostics:** invalid JSON marks the error line in the editor gutter. Hover for details or click to move the cursor. Each pane's bottom status identifies invalid JSON independently, so an error in one comparison input does not mark the other as invalid. **Ctrl/Cmd + Shift + E** jumps to the error position.
 - **Precise JSON:** preserves object key order and arbitrary-precision numbers. Open JSON/CSV with ⌘O / Ctrl+O; browser files stay local.
 - **Desktop + WebAssembly:** native GPU rendering through wgpu, with WebGPU/WebGL2 in the browser.
@@ -93,8 +94,12 @@ trunk serve --open
 Open **http://127.0.0.1:8080**. `trunk build --release` generates `dist/` for
 HTTPS or localhost hosting. WebGPU falls back to WebGL2 when unavailable.
 
-DEBUG timing logs: native `FORMA_LOG=debug cargo run --release --locked`;
-web append `?debug=1` and enable **Verbose** in DevTools Console.
+Debug builds automatically record the low-volume caret/Path/Graph trace. Native
+`cargo run` writes `forma-debug.log`; set `FORMA_LOG_FILE=/path/to/file` to change it.
+Full timing logs remain opt-in with `FORMA_LOG=debug`. Web debug builds write the
+navigation trace to DevTools Console. For an agent-readable local Web log, start
+with `python3 scripts/debug-web.py`; events are written to `forma-debug.log`.
+Release Web builds require `?debug=1`.
 [Log fields and performance analysis](docs/debug.md).
 
 ## Source layout

@@ -76,10 +76,95 @@ fn graph_focus_reaches_containers_after_the_preview_limit() {
     assert!(!graph.covers_pointer(&pointer));
     let focused = build_graph_at(&value, &pointer).unwrap();
     assert!(focused.covers_pointer(&pointer));
-    assert_eq!(focused.nodes[0].pointer, format!("/{}", NODE_LIMIT + 499));
-    assert_eq!(focused.nodes.len(), 1);
+    assert_eq!(focused.nodes[0].pointer, "");
+    assert_eq!(focused.nodes[1].pointer, format!("/{}", NODE_LIMIT + 499));
+    assert_eq!(focused.nodes[1].parent, Some(0));
+    assert!(focused.nodes[0].x + NODE_WIDTH < focused.nodes[1].x);
+    assert_eq!(focused.nodes.len(), 2);
     assert!(!focused.covers_pointer(""));
     assert!(build_graph_at(&value, "").unwrap().covers_pointer(""));
+}
+
+#[test]
+fn graph_focus_keeps_parent_context_for_scalar_only_objects() {
+    let value = json!({
+        "outer": {
+            "entries": {
+                "late": {
+                    "first": 1,
+                    "second": 2,
+                    "third": 3,
+                    "fourth": 4,
+                    "fifth": 5,
+                    "sixth": 6,
+                    "seventh": 7,
+                    "eighth": 8,
+                    "ninth": 9,
+                    "zz_selected": 10
+                }
+            }
+        }
+    });
+    let pointer = "/outer/entries/late/zz_selected";
+    assert!(!build_graph(&value).covers_pointer(pointer));
+    let focused = build_graph_at(&value, pointer).unwrap();
+
+    assert!(focused.covers_pointer(pointer));
+    assert_eq!(focused.nodes.len(), 4);
+    assert_eq!(focused.nodes[0].pointer, "");
+    assert_eq!(focused.nodes[1].pointer, "/outer");
+    assert_eq!(focused.nodes[2].pointer, "/outer/entries");
+    assert_eq!(focused.nodes[3].pointer, "/outer/entries/late");
+    for index in 1..focused.nodes.len() {
+        assert_eq!(focused.nodes[index].parent, Some(index - 1));
+        assert!(focused.nodes[index - 1].x + NODE_WIDTH < focused.nodes[index].x);
+    }
+    assert!(
+        focused.nodes[3]
+            .rows
+            .iter()
+            .any(|row| row.pointer == pointer)
+    );
+    assert!(!focused.covers_pointer("/outer/entries"));
+}
+
+#[test]
+fn graph_focus_keeps_the_transparent_param_ancestor_chain() {
+    let value = json!({
+        "transparent_param": {
+            "people_hit_result": {
+                "a": 1,
+                "b": 2,
+                "c": 3,
+                "d": 4,
+                "e": 5,
+                "f": 6,
+                "g": 7,
+                "h": 8,
+                "dmp_18_user_ecom_8group": "新锐白领"
+            }
+        }
+    });
+    let pointer = "/transparent_param/people_hit_result/dmp_18_user_ecom_8group";
+    let focused = build_graph_at(&value, pointer).unwrap();
+
+    assert_eq!(focused.nodes.len(), 3);
+    assert_eq!(focused.nodes[0].pointer, "");
+    assert_eq!(focused.nodes[1].pointer, "/transparent_param");
+    assert_eq!(
+        focused.nodes[2].pointer,
+        "/transparent_param/people_hit_result"
+    );
+    assert_eq!(focused.nodes[1].parent, Some(0));
+    assert_eq!(focused.nodes[2].parent, Some(1));
+    assert!(
+        focused.nodes[2]
+            .rows
+            .iter()
+            .any(|row| row.pointer == pointer)
+    );
+    assert!(focused.covers_pointer(pointer));
+    assert!(!focused.covers_pointer("/transparent_param"));
 }
 
 #[test]
@@ -89,12 +174,12 @@ fn graph_focus_shows_omitted_scalars_without_losing_array_semantics() {
     let graph = build_graph(&value);
     assert!(!graph.covers_pointer(pointer));
     let focused = build_graph_at(&value, pointer).unwrap();
-    assert_eq!(focused.nodes[0].pointer, "/a~1b~0c");
-    assert_eq!(focused.nodes[0].title, "a/b~c");
-    assert_eq!(focused.nodes[0].kind, "array");
-    assert_eq!(focused.nodes[0].count, 1000);
-    assert_eq!(focused.nodes[0].rows.len(), 8);
-    let row = focused.nodes[0]
+    assert_eq!(focused.nodes[1].pointer, "/a~1b~0c");
+    assert_eq!(focused.nodes[1].title, "a/b~c");
+    assert_eq!(focused.nodes[1].kind, "array");
+    assert_eq!(focused.nodes[1].count, 1000);
+    assert_eq!(focused.nodes[1].rows.len(), 8);
+    let row = focused.nodes[1]
         .rows
         .iter()
         .find(|row| row.pointer == pointer)
@@ -243,4 +328,56 @@ fn graph_preview_cap_preserves_valid_edges_and_reports_truncation() {
             .skip(1)
             .all(|node| node.parent == Some(0))
     );
+}
+
+#[test]
+fn cached_source_navigation_matches_existing_boundaries() {
+    use forma::{edit, source_index};
+    use std::sync::Arc;
+    for text in [
+        "  {\n  \"a/b~c\": [1, {\"名字\": \"🚀\"}, true],\n \"empty\": {}, \"x\": null\n}  ",
+        "[ 1 , 2 , [3,4], {}, [] ]",
+        "{\"duplicate\":1,\"duplicate\":2}",
+        "{\"escaped\\\"key\":\"a\\\\b\",\"a\":{\"b\":3}}",
+        " 42 ",
+    ] {
+        let text = Arc::new(text.to_string());
+        let index = source_index::cached(&text).unwrap();
+        assert!(Arc::ptr_eq(&index, &source_index::cached(&text).unwrap()));
+        for offset in 0..=text.len() + 1 {
+            let expected = edit::pointer_at_offset(&text, offset).unwrap();
+            assert_eq!(
+                index.pointer_at_offset(offset).unwrap(),
+                expected,
+                "offset {offset}: {text}"
+            );
+            if let Some(pointer) = expected {
+                assert_eq!(
+                    index.source_range(&pointer),
+                    edit::source_range(&text, &pointer)
+                );
+            }
+        }
+        for pointer in ["", "/missing", "/~2", "bad", "/01", "/999", "/0/x"] {
+            assert_eq!(
+                index.source_range(pointer).is_ok(),
+                edit::source_range(&text, pointer).is_ok()
+            );
+        }
+    }
+}
+
+#[test]
+fn source_cache_rebuilds_after_revision_change_and_eviction() {
+    use forma::source_index;
+    use std::sync::Arc;
+    let old = Arc::new("{\"a\":1}".to_string());
+    let first = source_index::cached(&old).unwrap();
+    for text in ["{\"b\":2}", "[1,2,3]"] {
+        let index = source_index::cached(&Arc::new(text.into())).unwrap();
+        assert_eq!(index.pointer_at_offset(1).unwrap().is_some(), true);
+    }
+    let rebuilt = source_index::cached(&old).unwrap();
+    assert!(!Arc::ptr_eq(&first, &rebuilt));
+    assert_eq!(first.source_range("/a"), rebuilt.source_range("/a"));
 }
