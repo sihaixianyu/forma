@@ -1,5 +1,77 @@
 use super::*;
 
+#[test]
+fn long_paste_preserves_viewport_but_typing_still_follows_the_caret() {
+    let ctx = egui::Context::default();
+    configure(&ctx, false);
+    let id = egui::Id::new("paste_scroll_test");
+    let mut text = String::new();
+    let pasted = format!("[\n{}\n]", vec!["  {\"value\": \"中文\"}"; 500].join(",\n"));
+    for frame in 0..30 {
+        let events = match frame {
+            1 => {
+                ctx.memory_mut(|memory| memory.request_focus(id));
+                vec![egui::Event::Paste(pasted.clone())]
+            }
+            15 => vec![egui::Event::Text(" ".into())],
+            _ => vec![],
+        };
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(600.0, 300.0),
+                )),
+                time: Some(frame as f64 * 0.1),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let scroll = egui::ScrollArea::vertical()
+                        .max_height(160.0)
+                        .show(ui, |ui| {
+                            show_code_editor(
+                                ui,
+                                "paste_scroll_test",
+                                false,
+                                EDITOR_LINE_HEIGHT,
+                                egui::TextEdit::multiline(&mut text)
+                                    .id(id)
+                                    .code_editor()
+                                    .desired_rows(1),
+                            )
+                        });
+                    if (1..15).contains(&frame) {
+                        assert_eq!(
+                            scroll.state.offset.y, 0.0,
+                            "paste must keep the view at the top"
+                        );
+                        assert_eq!(
+                            scroll
+                                .inner
+                                .state
+                                .cursor
+                                .char_range()
+                                .unwrap()
+                                .primary
+                                .index,
+                            pasted.chars().count()
+                        );
+                    }
+                    if frame == 29 {
+                        assert!(
+                            scroll.state.offset.y > 1000.0,
+                            "typing should reveal the caret"
+                        );
+                    }
+                });
+            },
+        );
+    }
+    assert_eq!(text, format!("{pasted} "));
+}
+
 mod history_tests {
 
     use super::*;

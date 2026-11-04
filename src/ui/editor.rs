@@ -271,20 +271,24 @@ pub(super) fn show_code_editor(
         .graphics_mut(|graphics| graphics.entry(ui.layer_id()).next_idx());
     let stroke = ui.visuals().text_cursor.stroke;
     ui.visuals_mut().text_cursor.stroke.color = Color32::TRANSPARENT;
+    let pasting = ui.input(|input| {
+        input
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::Paste(_)))
+    });
     let mut output = editor.show(ui);
+    if pasting && output.response.changed() {
+        // TextEdit follows the caret to the end of inserted text. Keep the current
+        // viewport on paste so a large document can be read from where it was pasted.
+        ui.scroll_to_rect(ui.clip_rect(), None);
+    }
     paint_visible_rows(ui, first_shape, &output.galley);
     ui.visuals_mut().text_cursor.stroke = stroke;
     if changed {
         output.response.mark_changed();
     }
-    let separate = changed
-        || !output.response.changed()
-        || ui.input(|input| {
-            input
-                .events
-                .iter()
-                .any(|event| matches!(event, egui::Event::Paste(_)))
-        });
+    let separate = changed || !output.response.changed() || pasting;
     let range = output
         .state
         .cursor
