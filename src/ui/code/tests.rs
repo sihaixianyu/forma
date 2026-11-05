@@ -31,9 +31,9 @@ fn typography_clamps_to_supported_ranges_and_rebuilds_layouts() {
         EditorTypography::default(),
         EditorTypography {
             font_size: 12.0,
-            line_height: 20.0,
+            line_height: 18.0,
         },
-        "editor defaults should use a 12px font and 20px line height"
+        "editor defaults should use a 12px font and 18px line height"
     );
 
     let mut typography = EditorTypography {

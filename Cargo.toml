@@ -74,6 +74,14 @@ path = "test/edit.rs"
 name = "alignment"
 path = "test/alignment.rs"
 
+[[test]]
+name = "array_comparison"
+path = "test/array_comparison.rs"
+
+[[test]]
+name = "review"
+path = "test/review.rs"
+
 [[bench]]
 name = "workspace"
 path = "bench/workspace.rs"

@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn review_retains_original_array_order_across_recomparison_and_mode_changes() {
+    let mut app = ready_app();
+    let (sender, receiver) = mpsc::channel();
+    app.jobs = sender.into();
+    app.editor = "[{\"id\":1,\"v\":1},{\"id\":2,\"v\":2}]".into();
+    app.dirty = true;
+    app.parse(Format::Keep);
+    finish(&mut app, receiver.recv().unwrap());
+    app.view = View::Compare;
+    let original = "[{\"id\":2,\"v\":20},{\"id\":1,\"v\":1}]";
+    app.compare_text = original.into();
+    for _ in 0..2 {
+        app.clear_comparison();
+        app.tick_automatic_jobs(Instant::now() + Duration::from_secs(1));
+        finish(&mut app, receiver.recv().unwrap());
+        assert_eq!(
+            app.differences
+                .iter()
+                .filter(|d| d.kind == forma::review::ChangeKind::Moved)
+                .count(),
+            1
+        );
+        assert_eq!(
+            app.review_original_right.as_deref().unwrap().as_str(),
+            original
+        );
+        assert_eq!(
+            app.compare_alignment.as_ref().unwrap().right.source,
+            app.compare_text
+        );
+    }
+    app.review_options.array_mode = forma::review::ArrayMode::Position;
+    app.reset_sort_state(); // Editing or formatting the left input keeps right provenance.
+    assert_eq!(
+        app.review_original_right.as_deref().unwrap().as_str(),
+        original
+    );
+    app.clear_comparison();
+    app.tick_automatic_jobs(Instant::now() + Duration::from_secs(1));
+    finish(&mut app, receiver.recv().unwrap());
+    assert_eq!(app.compare_text, original);
+    assert!(
+        app.differences
+            .iter()
+            .all(|d| d.kind != forma::review::ChangeKind::Moved)
+    );
+}
+
+#[test]
 fn imported_browser_text_uses_the_same_json_and_csv_processing() {
     let json: Arc<String> = Arc::new("{\"中文\":123456789012345678901234567890}".into());
     let Output::Document(doc, _) =
@@ -90,6 +139,71 @@ fn sort_state_machine_restores_the_exact_original_source() {
         serde_json::to_value(app.graph.as_ref()).unwrap(),
         initial_graph
     );
+}
+
+#[test]
+fn comparison_sort_cycles_both_panes_and_restores_their_exact_originals() {
+    let mut app = ready_app();
+    let (sender, receiver) = mpsc::channel();
+    app.jobs = sender.into();
+    let left = "{\"z\":0,\"a\":{\"b\":2,\"a\":1}}\n";
+    let right = "{ \"a\": {\"a\": \"中文\", \"b\": 3}, \"z\": 9 }\n";
+    app.editor = left.into();
+    app.dirty = true;
+    app.compare_text = right.into();
+    app.view = View::Compare;
+    for (state, format) in [
+        (SortState::Ascending, Format::SortAscending),
+        (SortState::Descending, Format::SortDescending),
+        (SortState::Original, Format::Keep),
+    ] {
+        app.apply_sort_state(state);
+        finish(&mut app, receiver.recv().unwrap());
+        assert_eq!(
+            app.editor,
+            *process(Arc::new(left.into()), format).unwrap().text
+        );
+        assert_eq!(
+            app.compare_text,
+            *process(Arc::new(right.into()), format).unwrap().text
+        );
+        assert!(app.sort_state == state);
+        assert!(app.compare_alignment.is_none());
+        assert!(app.compare_due.is_some());
+        app.tick_automatic_jobs(Instant::now() + Duration::from_secs(1));
+        finish(&mut app, receiver.recv().unwrap());
+        let alignment = app.compare_alignment.as_ref().unwrap();
+        assert_eq!(alignment.left.source, app.editor);
+        assert_eq!(alignment.right.source, app.compare_text);
+    }
+    assert_eq!(app.editor, left);
+    assert_eq!(app.compare_text, right);
+    assert!(app.sort_original.is_none());
+    assert!(app.sort_right_original.is_none());
+}
+
+#[test]
+fn comparison_sort_leaves_both_inputs_unchanged_if_either_is_invalid() {
+    for (left, right, invalid_right) in [
+        ("{\"z\":0,\"a\":1}", "{bad}", true),
+        ("{bad}", "{\"z\":0,\"a\":1}", false),
+    ] {
+        let mut app = ready_app();
+        let (sender, receiver) = mpsc::channel();
+        app.jobs = sender.into();
+        app.editor = left.into();
+        app.dirty = true;
+        app.compare_text = right.into();
+        app.view = View::Compare;
+        app.apply_sort_state(SortState::Ascending);
+        finish(&mut app, receiver.recv().unwrap());
+        assert_eq!(app.editor, left);
+        assert_eq!(app.compare_text, right);
+        assert!(app.error);
+        assert!(app.sort_state == SortState::Original);
+        assert_eq!(app.right_syntax_error.is_some(), invalid_right);
+        assert_eq!(app.syntax_error.is_some(), !invalid_right);
+    }
 }
 
 #[test]
@@ -302,7 +416,7 @@ fn left_edits_parse_before_refreshing_automatic_comparison() {
 fn pasted_json_comparison_returns_source_ranges_on_both_sides() {
     let left: Arc<String> = Arc::new("{\"items\":[{\"name\":\"中文\"}],\"removed\":true}".into());
     let right: Arc<String> = Arc::new("{\"items\":[{\"name\":\"updated\"}],\"added\":null}".into());
-    let Output::Comparison(diffs, _, a, b) =
+    let Output::Comparison(diffs, _, a, b, _) =
         execute(Job::Compare(left.clone(), right.clone())).unwrap()
     else {
         panic!("comparison expected");
@@ -310,14 +424,139 @@ fn pasted_json_comparison_returns_source_ranges_on_both_sides() {
     assert_eq!(diffs.len(), 3);
     assert_eq!(&left[a.unwrap()], "\"中文\"");
     assert_eq!(&right[b.unwrap()], "\"updated\"");
-    let (a, b) = diff_ranges(&left, &right, "/removed");
+    let (a, b) = diff_ranges(
+        &left,
+        &right,
+        diffs.iter().find(|d| d.pointer == "/removed").unwrap(),
+    );
     assert_eq!(&left[a.unwrap()], "true");
     assert!(b.is_none());
 }
 
 #[test]
+fn comparison_reorders_shared_keys_and_updates_ranges_and_display_together() {
+    let mut app = ready_app();
+    let (sender, receiver) = mpsc::channel();
+    app.jobs = sender.into();
+    let left = "{\n  \"z\": {\n    \"b\": 1,\n    \"a\": 2\n  },\n  \"items\": [\n    {\n      \"y\": 3,\n      \"x\": 4\n    }\n  ]\n}";
+    app.editor = left.into();
+    app.dirty = true;
+    app.parse(Format::Keep);
+    finish(&mut app, receiver.recv().unwrap());
+    app.view = View::Compare;
+    app.compare_text = r#"{"items":[{"x":4,"y":3}],"z":{"a":20,"b":1}}"#.into();
+    app.submit(Job::Compare(
+        app.full_text.clone(),
+        Arc::new(app.compare_text.clone()),
+    ));
+    finish(&mut app, receiver.recv().unwrap());
+    assert_eq!(app.editor, left);
+    let expected = left.replace("\"a\": 2", "\"a\": 20");
+    assert_eq!(app.compare_text, expected);
+    assert_eq!(app.compare_search_source.as_str(), expected);
+    assert_eq!(app.differences.len(), 1);
+    assert_eq!(app.differences[0].pointer, "/z/a");
+    assert_eq!(
+        &app.compare_text[app.compare_right_range.clone().unwrap()],
+        "20"
+    );
+    let aligned = app.compare_alignment.as_ref().unwrap();
+    assert_eq!(aligned.right.source, expected);
+    assert_eq!(aligned.left.rows, aligned.right.rows);
+    assert_eq!(
+        aligned
+            .left
+            .changed
+            .iter()
+            .filter(|changed| **changed)
+            .count(),
+        1
+    );
+    assert_eq!(aligned.right.changed, aligned.left.changed);
+}
+
+#[test]
+fn array_comparison_navigation_uses_the_matched_element_on_each_side() {
+    let mut app = ready_app();
+    let (sender, receiver) = mpsc::channel();
+    app.jobs = sender.into();
+    let left = serde_json::json!({"items":[{"id":1,"v":"a"},{"id":2,"v":"b"},{"id":3,"v":"c"}]});
+    let source = serde_json::to_string_pretty(&left).unwrap();
+    app.editor = source.clone();
+    app.dirty = true;
+    app.parse(Format::Keep);
+    finish(&mut app, receiver.recv().unwrap());
+    app.view = View::Compare;
+    app.compare_text = r#"{"items":[{"id":3,"v":"changed"},{"id":1,"v":"a"}]}"#.into();
+    app.submit(Job::Compare(
+        app.full_text.clone(),
+        Arc::new(app.compare_text.clone()),
+    ));
+    finish(&mut app, receiver.recv().unwrap());
+    assert_eq!(app.editor, source);
+    assert_eq!(app.differences.len(), 3);
+    let deleted = app
+        .differences
+        .iter()
+        .find(|d| d.kind == forma::review::ChangeKind::Removed)
+        .unwrap()
+        .clone();
+    app.submit(Job::LocateDiff(
+        app.full_text.clone(),
+        Arc::new(app.compare_text.clone()),
+        deleted,
+    ));
+    finish(&mut app, receiver.recv().unwrap());
+    assert!(app.compare_left_range.is_some());
+    assert!(
+        app.compare_right_range.is_none(),
+        "a deleted element must not highlight another right element"
+    );
+    let difference = app
+        .differences
+        .iter()
+        .find(|d| d.kind == forma::review::ChangeKind::Changed)
+        .unwrap()
+        .clone();
+    app.submit(Job::LocateDiff(
+        app.full_text.clone(),
+        Arc::new(app.compare_text.clone()),
+        difference,
+    ));
+    finish(&mut app, receiver.recv().unwrap());
+    assert_eq!(
+        &app.editor[app.compare_left_range.clone().unwrap()],
+        "\"c\""
+    );
+    assert_eq!(
+        &app.compare_text[app.compare_right_range.clone().unwrap()],
+        "\"changed\""
+    );
+    assert_eq!(
+        app.differences
+            .iter()
+            .find(|d| d.kind == forma::review::ChangeKind::Changed)
+            .unwrap()
+            .left_pointer
+            .as_deref(),
+        Some("/items/2/v")
+    );
+    assert_eq!(
+        app.differences
+            .iter()
+            .find(|d| d.kind == forma::review::ChangeKind::Changed)
+            .unwrap()
+            .right_pointer
+            .as_deref(),
+        Some("/items/1/v")
+    );
+    let alignment = app.compare_alignment.as_ref().unwrap();
+    assert_eq!(alignment.right.source, app.compare_text);
+}
+
+#[test]
 fn pasted_json_comparison_reports_equality_and_which_input_is_invalid() {
-    let Output::Comparison(diffs, _, _, _) = execute(Job::Compare(
+    let Output::Comparison(diffs, _, _, _, _) = execute(Job::Compare(
         Arc::new("{\"a\":1,\"b\":2}".into()),
         Arc::new("{\"b\":2,\"a\":1}".into()),
     ))

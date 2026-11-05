@@ -93,47 +93,48 @@ pub(crate) struct Palette {
 }
 
 pub(crate) fn palette(dark: bool) -> Palette {
+    // Zed One syntax colors; compare uses stronger red/green backgrounds and markers.
     if dark {
         Palette {
             canvas: Color32::from_rgb(40, 44, 51),
             surface: Color32::from_rgb(47, 52, 62),
-            subtle: Color32::from_rgb(46, 52, 62),
+            subtle: Color32::from_rgb(47, 52, 62),
             border: Color32::from_rgb(70, 75, 87),
-            text: Color32::from_rgb(220, 224, 229),
-            editor_text: Color32::from_rgb(172, 178, 190),
-            muted: Color32::from_rgb(169, 175, 188),
-            accent: Color32::from_rgb(116, 173, 232),
-            tint: Color32::from_rgb(54, 60, 70),
-            selected: Color32::from_rgb(69, 74, 86),
-            green: Color32::from_rgb(161, 193, 129),
+            text: Color32::from_rgb(200, 204, 212),
+            editor_text: Color32::from_rgb(200, 204, 212),
+            muted: Color32::from_rgb(139, 145, 157),
+            accent: Color32::from_rgb(115, 173, 233),
+            tint: Color32::from_rgb(59, 64, 72),
+            selected: Color32::from_rgb(41, 59, 91),
+            green: Color32::from_rgb(48, 216, 138),
             string: Color32::from_rgb(161, 193, 129),
-            amber: Color32::from_rgb(222, 193, 132),
+            amber: Color32::from_rgb(223, 193, 132),
             number: Color32::from_rgb(191, 149, 106),
-            red: Color32::from_rgb(208, 114, 119),
+            red: Color32::from_rgb(255, 98, 104),
             property: Color32::from_rgb(208, 114, 119),
-            search_match: Color32::from_rgba_unmultiplied(116, 173, 232, 102),
-            search_active: Color32::from_rgba_unmultiplied(232, 175, 116, 102),
+            search_match: Color32::from_rgba_unmultiplied(115, 173, 233, 102),
+            search_active: Color32::from_rgba_unmultiplied(222, 175, 100, 110),
         }
     } else {
         Palette {
             canvas: Color32::from_rgb(250, 250, 250),
             surface: Color32::from_rgb(235, 235, 236),
-            subtle: Color32::from_rgb(235, 235, 236),
+            subtle: Color32::from_rgb(239, 239, 239),
             border: Color32::from_rgb(201, 201, 202),
-            text: Color32::from_rgb(36, 37, 41),
-            editor_text: Color32::from_rgb(36, 37, 41),
-            muted: Color32::from_rgb(88, 88, 90),
-            accent: Color32::from_rgb(92, 120, 226),
+            text: Color32::from_rgb(56, 58, 65),
+            editor_text: Color32::from_rgb(56, 58, 65),
+            muted: Color32::from_rgb(119, 121, 128),
+            accent: Color32::from_rgb(91, 121, 227),
             tint: Color32::from_rgb(223, 223, 224),
-            selected: Color32::from_rgb(202, 202, 202),
-            green: Color32::from_rgb(102, 159, 89),
+            selected: Color32::from_rgb(217, 220, 234),
+            green: Color32::from_rgb(22, 134, 75),
             string: Color32::from_rgb(100, 159, 87),
-            amber: Color32::from_rgb(164, 136, 25),
+            amber: Color32::from_rgb(173, 110, 37),
             number: Color32::from_rgb(173, 110, 37),
-            red: Color32::from_rgb(211, 97, 81),
+            red: Color32::from_rgb(220, 62, 66),
             property: Color32::from_rgb(211, 96, 79),
-            search_match: Color32::from_rgba_unmultiplied(92, 121, 226, 102),
-            search_active: Color32::from_rgba_unmultiplied(208, 169, 35, 102),
+            search_match: Color32::from_rgba_unmultiplied(91, 121, 227, 102),
+            search_active: Color32::from_rgba_unmultiplied(222, 175, 100, 110),
         }
     }
 }
@@ -178,11 +179,7 @@ pub fn configure(ctx: &egui::Context, dark: bool) {
     style.visuals.window_fill = p.surface;
     style.visuals.extreme_bg_color = p.subtle;
     style.visuals.faint_bg_color = p.subtle;
-    style.visuals.selection.bg_fill = if dark {
-        Color32::from_rgb(58, 78, 108)
-    } else {
-        Color32::from_rgb(201, 218, 248)
-    };
+    style.visuals.selection.bg_fill = p.selected;
     // egui also uses this stroke color for selected text.
     style.visuals.selection.stroke = Stroke::new(1.0_f32, p.text);
     style.visuals.text_cursor.stroke = Stroke::new(2.0_f32, p.accent);

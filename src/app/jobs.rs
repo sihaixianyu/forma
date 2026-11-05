@@ -14,16 +14,20 @@ pub(crate) enum Job {
     Open(PathBuf),
     Import(Arc<String>, String),
     Compare(Arc<String>, Arc<String>),
+    CompareOriginal(Arc<String>, Arc<String>),
+    CompareWithOptions(Arc<String>, Arc<String>, forma::review::Options),
     FormatRight(Arc<String>),
-    LocateDiff(Arc<String>, Arc<String>, String),
+    SortBoth(Arc<String>, Arc<String>, Format),
+    LocateDiff(Arc<String>, Arc<String>, Difference),
 }
 
 impl Job {
     pub(crate) fn label(&self) -> &'static str {
         let format = match self {
-            Job::RequestFormat(format) | Job::Process(_, format) | Job::Transform(_, format, _) => {
-                Some(format)
-            }
+            Job::RequestFormat(format)
+            | Job::Process(_, format)
+            | Job::Transform(_, format, _)
+            | Job::SortBoth(_, _, format) => Some(format),
             _ => None,
         };
         if let Some(format) = format {
@@ -40,7 +44,9 @@ impl Job {
             #[cfg(not(target_arch = "wasm32"))]
             Job::Open(_) => "Open file",
             Job::Import(..) => "Open file",
-            Job::Compare(..) => "Compare JSON",
+            Job::Compare(..) | Job::CompareOriginal(..) | Job::CompareWithOptions(..) => {
+                "Compare JSON"
+            }
             Job::FormatRight(..) => "Format right JSON",
             Job::LocateDiff(..) => "Locate difference",
             Job::Locate(..) => "Locate source",
@@ -55,6 +61,7 @@ impl Job {
 }
 pub(crate) enum Output {
     Document(Document, Arc<forma::graph::Graph>),
+    SortedBoth(Document, Arc<forma::graph::Graph>, Arc<String>),
     Invalid(Arc<String>, String),
     InvalidComparison(Option<SyntaxError>, Option<SyntaxError>),
     Comparison(
@@ -62,6 +69,7 @@ pub(crate) enum Output {
         Arc<forma::alignment::Alignment>,
         Option<std::ops::Range<usize>>,
         Option<std::ops::Range<usize>>,
+        Option<Arc<String>>,
     ),
     RightText(Arc<String>),
     DiffLocation(
@@ -100,19 +108,28 @@ pub(crate) struct Completed {
 pub(crate) fn diff_ranges(
     left: &Arc<String>,
     right: &Arc<String>,
-    pointer: &str,
+    difference: &Difference,
 ) -> (
     Option<std::ops::Range<usize>>,
     Option<std::ops::Range<usize>>,
 ) {
-    let pointer = if pointer == "/ (root)" { "" } else { pointer };
+    if difference.left_range.is_some() || difference.right_range.is_some() {
+        return (
+            difference.left_range.clone(),
+            difference.right_range.clone(),
+        );
+    }
+    let range = |source: &Arc<String>, pointer: &Option<String>| {
+        pointer.as_deref().and_then(|pointer| {
+            forma::source_index::cached(source)
+                .ok()?
+                .source_range(pointer)
+                .ok()
+        })
+    };
     (
-        forma::source_index::cached(left)
-            .and_then(|index| index.source_range(pointer))
-            .ok(),
-        forma::source_index::cached(right)
-            .and_then(|index| index.source_range(pointer))
-            .ok(),
+        range(left, &difference.left_pointer),
+        range(right, &difference.right_pointer),
     )
 }
 
@@ -121,9 +138,39 @@ pub(crate) fn document_output(doc: Document) -> Output {
     Output::Document(doc, graph)
 }
 
+fn execute_review(
+    left: Arc<String>,
+    right: Arc<String>,
+    options: &forma::review::Options,
+    normalize: bool,
+) -> Result<Output, String> {
+    let (a, b) = match (forma::parse_json(&left), forma::parse_json(&right)) {
+        (Ok(a), Ok(b)) => (a, b),
+        (a, b) => {
+            return Ok(Output::InvalidComparison(
+                a.err().map(|message| SyntaxError::new(&message, &left)),
+                b.err().map(|message| SyntaxError::new(&message, &right)),
+            ));
+        }
+    };
+    let report = forma::review::build(left, right, &a, b, options, normalize, 1000)?;
+    let first = report.differences.first();
+    let ranges = first
+        .map(|d| (d.left_range.clone(), d.right_range.clone()))
+        .unwrap_or_default();
+    Ok(Output::Comparison(
+        report.differences,
+        Arc::new(report.alignment),
+        ranges.0,
+        ranges.1,
+        report.reordered,
+    ))
+}
+
 pub(crate) fn execute(job: Job) -> Result<Output, String> {
     log::debug!(target: "forma", "event=job_start operation={:?}", job.label());
     let _stage = forma::diagnostics::Stage::new("execute_job", 0);
+    let keep_order = matches!(&job, Job::CompareOriginal(..));
     let result = (|| match job {
         Job::RequestFormat(_) => Err("Unresolved format request".into()),
         Job::Transform(doc, format, graph) => {
@@ -214,40 +261,23 @@ pub(crate) fn execute(job: Job) -> Result<Output, String> {
                 Err(error) => Output::Invalid(text, error),
             })
         }
-        Job::Compare(left, right) => {
-            let a = forma::parse_json(&left);
-            let b = forma::parse_json(&right);
-            let (a, b) = match (a, b) {
-                (Ok(a), Ok(b)) => (a, b),
-                (a, b) => {
-                    return Ok(Output::InvalidComparison(
-                        a.err().map(|message| SyntaxError::new(&message, &left)),
-                        b.err().map(|message| SyntaxError::new(&message, &right)),
-                    ));
-                }
-            };
-            let diffs = {
-                let _stage =
-                    forma::diagnostics::Stage::new("compare_walk", left.len() + right.len());
-                compare(&a, &b, 1000)
-            };
-            log::debug!(target: "forma", "event=compare_result differences={}", diffs.len());
-            let (a, b) = diffs
-                .first()
-                .map(|d| diff_ranges(&left, &right, &d.pointer))
-                .unwrap_or_default();
-            let alignment = {
-                let _stage =
-                    forma::diagnostics::Stage::new("compare_alignment", left.len() + right.len());
-                Arc::new(forma::alignment::align(&left, &right))
-            };
-            Ok(Output::Comparison(diffs, alignment, a, b))
+        Job::Compare(left, right) | Job::CompareOriginal(left, right) => {
+            execute_review(left, right, &forma::review::Options::default(), !keep_order)
+        }
+        Job::CompareWithOptions(left, right, options) => {
+            execute_review(left, right, &options, true)
         }
         Job::FormatRight(text) => {
             process(text, Format::Pretty).map(|doc| Output::RightText(doc.text))
         }
-        Job::LocateDiff(left, right, pointer) => {
-            let (a, b) = diff_ranges(&left, &right, &pointer);
+        Job::SortBoth(left, right, format) => {
+            let left = process(left, format).map_err(|error| format!("Left JSON: {error}"))?;
+            let right = process(right, format).map_err(|error| format!("Right JSON: {error}"))?;
+            let graph = Arc::new(forma::graph::build_graph(&left.value));
+            Ok(Output::SortedBoth(left, graph, right.text))
+        }
+        Job::LocateDiff(left, right, difference) => {
+            let (a, b) = diff_ranges(&left, &right, &difference);
             Ok(Output::DiffLocation(a, b))
         }
     })();

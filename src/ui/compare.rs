@@ -2,6 +2,8 @@ use super::*;
 
 impl App {
     fn right_source_changed(&mut self) {
+        self.review_original_right = None;
+        self.reset_sort_state();
         self.right_syntax_error = None;
         self.right_json_valid = false;
         self.right_pointer.clear();
@@ -20,21 +22,29 @@ impl App {
         if count == 0 {
             return;
         }
-        self.compare_selected = if backwards {
+        let next = if backwards {
             (self.compare_selected + count - 1) % count
         } else {
             (self.compare_selected + 1) % count
         };
-        let pointer = self.differences[self.compare_selected].pointer.clone();
-        self.pointer.clone_from(&pointer);
-        self.right_pointer.clone_from(&pointer);
+        self.select_difference(next);
+    }
+    pub(super) fn select_difference(&mut self, index: usize) {
+        if self.busy || index >= self.differences.len() {
+            return;
+        }
+        self.compare_selected = index;
+        let difference = self.differences[index].clone();
+        self.pointer = difference.left_pointer.clone().unwrap_or_default();
+        self.right_pointer = difference.right_pointer.clone().unwrap_or_default();
         let left = self.source();
         self.submit(Job::LocateDiff(
             left,
             Arc::new(self.compare_text.clone()),
-            pointer,
+            difference,
         ));
     }
+
     pub(super) fn header_height(&self) -> f32 {
         if self.view == View::Compare {
             self.source_header_height.max(self.right_header_height)
@@ -56,82 +66,183 @@ impl App {
     }
 
     pub(super) fn comparison_header(&mut self, ui: &mut egui::Ui, p: Palette, right_pane: bool) {
-        let show = !self.differences.is_empty()
+        let (removed, added) = self.compare_alignment.as_ref().map_or((0, 0), |alignment| {
+            (
+                alignment
+                    .left
+                    .changed
+                    .iter()
+                    .filter(|changed| **changed)
+                    .count(),
+                alignment
+                    .right
+                    .changed
+                    .iter()
+                    .filter(|changed| **changed)
+                    .count(),
+            )
+        });
+        let show = self.only_differences
+            || !self.differences.is_empty()
+            || removed + added > 0
             || self.syntax_error.is_some()
             || self.right_syntax_error.is_some();
         if !show {
             return;
         }
-        ui.horizontal(|ui| {
-            let count = self.differences.len();
-            let syntax = self
-                .right_syntax_error
-                .as_ref()
-                .map(|error| ("Right", error))
-                .or_else(|| self.syntax_error.as_ref().map(|error| ("Left", error)));
-            let both_invalid = self.syntax_error.is_some() && self.right_syntax_error.is_some();
-            let message = if both_invalid {
-                "Both inputs: Invalid JSON".into()
-            } else if let Some((side, error)) = syntax {
-                format!("{side}: {}", error.summary())
-            } else {
-                format!(
-                    "Difference {} / {}{}",
-                    self.compare_selected + 1,
-                    count,
-                    if count == 1000 { " (limit)" } else { "" }
-                )
-            };
-            let summary = ui.label(
-                RichText::new(message)
-                    .size(12.0)
-                    .color(if syntax.is_some() { p.red } else { p.muted }),
-            );
-            if let Some((_, error)) = syntax {
-                summary.clone().on_hover_text(if both_invalid {
-                    self.status.as_str()
-                } else {
-                    error.message.as_str()
+        let can_navigate = !self.busy && !self.differences.is_empty();
+        let viewport = ui.ctx().content_rect();
+        let middle = viewport.left() + viewport.width() * self.split_ratio;
+        let bounds = egui::Rect::from_min_max(
+            egui::pos2(
+                if right_pane { middle } else { viewport.left() },
+                ui.cursor().top(),
+            ),
+            egui::pos2(
+                if right_pane { viewport.right() } else { middle },
+                ui.cursor().top() + 26.0,
+            ),
+        );
+        ui.painter()
+            .with_clip_rect(viewport)
+            .rect_filled(bounds, 0, p.subtle);
+        ui.painter().with_clip_rect(viewport).vline(
+            middle,
+            bounds.y_range(),
+            Stroke::new(1.0, p.border),
+        );
+        ui.scope_builder(egui::UiBuilder::new(), |ui| {
+            egui::Frame::new()
+                .inner_margin(egui::Margin::symmetric(8, 3))
+                .show(ui, |ui| {
+                    ui.set_min_height(20.0);
+                    ui.style_mut().override_font_id = Some(FontId::proportional(11.0));
+                    ui.spacing_mut().interact_size = Vec2::new(20.0, 20.0);
+                    ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
+                    ui.spacing_mut().button_padding = Vec2::new(3.0, 1.0);
+                    ui.horizontal(|ui| {
+                        let compact = ui.available_width() < 420.0;
+                        let count = self.differences.len();
+                        let syntax = self
+                            .right_syntax_error
+                            .as_ref()
+                            .map(|error| ("Right", error))
+                            .or_else(|| self.syntax_error.as_ref().map(|error| ("Left", error)));
+                        let both_invalid =
+                            self.syntax_error.is_some() && self.right_syntax_error.is_some();
+                        let has_syntax_error = syntax.is_some();
+                        let message = if both_invalid {
+                            "Both inputs: Invalid JSON".into()
+                        } else if let Some((side, error)) = syntax {
+                            format!("{side}: {}", error.summary())
+                        } else if count == 0 {
+                            if removed + added > 0 {
+                                "Text changes".into()
+                            } else {
+                                "No differences".into()
+                            }
+                        } else if compact {
+                            format!("{} / {}", self.compare_selected + 1, count)
+                        } else {
+                            format!(
+                                "Difference {} / {}{}",
+                                self.compare_selected + 1,
+                                count,
+                                if count == 1000 { " (limit)" } else { "" }
+                            )
+                        };
+                        let summary = ui.add(
+                            egui::Label::new(
+                                RichText::new(message)
+                                    .size(11.0)
+                                    .color(if syntax.is_some() { p.red } else { p.text }),
+                            )
+                            .truncate()
+                            .show_tooltip_when_elided(false),
+                        );
+                        if let Some((_, error)) = syntax {
+                            summary.clone().on_hover_text(if both_invalid {
+                                self.status.as_str()
+                            } else {
+                                error.message.as_str()
+                            });
+                            let label = ui.ctx().format_shortcut(&error_shortcut());
+                            if ui.button(format!("Go to error · {label}")).clicked() {
+                                self.jump_to_error(ui.ctx(), self.right_syntax_error.is_some());
+                            }
+                        }
+                        if let Some(diff) = self.differences.get(self.compare_selected) {
+                            summary.on_hover_text(format!(
+                                "{}\n− {}\n+ {}\nOriginal right path: {}{}",
+                                diff.pointer,
+                                diff.left,
+                                diff.right,
+                                diff.original_right_pointer
+                                    .as_deref()
+                                    .unwrap_or("(missing)"),
+                                if diff.uncertain {
+                                    "\nUncertain automatic match"
+                                } else {
+                                    ""
+                                }
+                            ));
+                        }
+                        if !has_syntax_error && !compact {
+                            ui.label(RichText::new(format!("−{removed}")).size(11.0).color(p.red))
+                                .on_hover_text("Removed or modified lines");
+                            ui.label(RichText::new(format!("+{added}")).size(11.0).color(p.green))
+                                .on_hover_text("Added or modified lines");
+                        }
+                        if ui
+                            .add_enabled(
+                                can_navigate,
+                                egui::Button::new("‹")
+                                    .min_size(Vec2::new(20.0, 20.0))
+                                    .corner_radius(5),
+                            )
+                            .on_hover_text("Previous difference")
+                            .clicked()
+                        {
+                            self.next_difference(true);
+                        }
+                        if ui
+                            .add_enabled(
+                                can_navigate,
+                                egui::Button::new("›")
+                                    .min_size(Vec2::new(20.0, 20.0))
+                                    .corner_radius(5),
+                            )
+                            .on_hover_text("Next difference")
+                            .clicked()
+                        {
+                            self.next_difference(false);
+                        }
+                        if !compact {
+                            let size = if right_pane {
+                                self.compare_text.len()
+                            } else {
+                                self.editor.len()
+                            };
+                            ui.label(RichText::new(format_size(size)).color(p.muted));
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .checkbox(&mut self.only_differences, "Diff Only")
+                                .changed()
+                            {
+                                self.review_focus = Some(self.only_differences);
+                                reset_review_folds(ui.ctx());
+                                self.compare_scroll = 0.0;
+                                ui.ctx().data_mut(|data| {
+                                    data.insert_temp(
+                                        egui::Id::new("forma_only_differences"),
+                                        self.only_differences,
+                                    )
+                                });
+                            }
+                        });
+                    });
                 });
-                let label = ui.ctx().format_shortcut(&error_shortcut());
-                if ui.button(format!("Go to error · {label}")).clicked() {
-                    self.jump_to_error(ui.ctx(), self.right_syntax_error.is_some());
-                }
-            }
-            if let Some(diff) = self.differences.get(self.compare_selected) {
-                summary.on_hover_text(format!(
-                    "{}\n− {}\n+ {}",
-                    diff.pointer, diff.left, diff.right
-                ));
-            }
-            if ui
-                .add_enabled(
-                    count > 0 && !self.busy,
-                    egui::Button::new("<").min_size(Vec2::new(28.0, 28.0)),
-                )
-                .on_hover_text("Previous difference")
-                .clicked()
-            {
-                self.next_difference(true);
-            }
-            if ui
-                .add_enabled(
-                    count > 0 && !self.busy,
-                    egui::Button::new(">").min_size(Vec2::new(28.0, 28.0)),
-                )
-                .on_hover_text("Next difference")
-                .clicked()
-            {
-                self.next_difference(false);
-            }
-            let size = if right_pane {
-                self.compare_text.len()
-            } else {
-                self.editor.len()
-            };
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(format_size(size)).size(11.0).color(p.muted));
-            });
         });
         self.path_separator(ui, p, right_pane);
     }

@@ -1,6 +1,8 @@
 #[cfg(feature = "bench-web")]
 mod bench;
 
+pub mod session;
+
 use eframe::egui;
 use std::{cell::Cell, rc::Rc, sync::mpsc};
 
@@ -81,6 +83,7 @@ fn install_find_shortcut(document: &web_sys::Document) -> Result<(), wasm_bindge
 pub fn start() {
     use wasm_bindgen::JsCast;
     wasm_bindgen_futures::spawn_local(async {
+        session::load().await;
         let document = web_sys::window().unwrap().document().unwrap();
         let canvas = document
             .get_element_by_id("forma")

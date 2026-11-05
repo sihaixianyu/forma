@@ -74,6 +74,33 @@ fn recursive_sort_leaves_arrays_in_order() {
 }
 
 #[test]
+fn comparison_key_order_follows_the_reference_recursively_without_moving_array_items() {
+    let reference: Value =
+        serde_json::from_str(r#"{"z":{"b":1,"a":2},"items":[{"y":1,"x":2},{"b":1,"a":2}]}"#)
+            .unwrap();
+    let mut right: Value = serde_json::from_str(
+        r#"{"items":[{"x":20,"y":10},{"a":40,"b":30}],"z":{"a":4,"only_right":5,"b":3}}"#,
+    )
+    .unwrap();
+    let original = right.clone();
+    assert!(forma::match_key_order(&reference, &mut right));
+    let keys = |value: &Value| {
+        value
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(keys(&right), ["z", "items"]);
+    assert_eq!(keys(&right["z"]), ["b", "a", "only_right"]);
+    assert_eq!(keys(&right["items"][0]), ["y", "x"]);
+    assert_eq!(keys(&right["items"][1]), ["b", "a"]);
+    assert_eq!(right, original, "only object key order may change");
+    assert!(!forma::match_key_order(&reference, &mut right));
+}
+
+#[test]
 fn rejects_invalid_documents_with_location() {
     for text in [
         "{\"x\":}",

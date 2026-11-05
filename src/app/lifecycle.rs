@@ -44,6 +44,12 @@ impl App {
                 .trim_end()
                 .to_owned(),
         );
+        #[cfg(target_arch = "wasm32")]
+        let restored = browser::session::inputs();
+        #[cfg(target_arch = "wasm32")]
+        let text = restored
+            .as_ref()
+            .map_or(text, |inputs| Arc::new(inputs.left.clone()));
         let mut app = Self {
             #[cfg(not(target_arch = "wasm32"))]
             smoke_test: cfg!(not(target_arch = "wasm32"))
@@ -82,6 +88,12 @@ impl App {
             active_right: false,
             sort_state: SortState::Original,
             sort_original: None,
+            sort_right_original: None,
+            keep_compare_order: false,
+            review_original_right: None,
+            review_options: forma::review::Options::default(),
+            only_differences: false,
+            review_focus: None,
             compare_text: String::new(),
             right_json_valid: false,
             compare_code: ui::CodeCache::default(),
@@ -100,6 +112,8 @@ impl App {
             comparison_done: false,
             #[cfg(target_arch = "wasm32")]
             files: browser::Files::new(ctx.clone()),
+            #[cfg(target_arch = "wasm32")]
+            saved_inputs: None,
             jobs,
             revision: 0,
             auto_due: None,
@@ -116,6 +130,16 @@ impl App {
             queued_actions: std::collections::VecDeque::new(),
             completed,
         };
+        #[cfg(target_arch = "wasm32")]
+        if let Some(inputs) = restored {
+            app.compare_text = inputs.right;
+            app.compare_search_source = Arc::new(app.compare_text.clone());
+            app.view = if inputs.compare {
+                View::Compare
+            } else {
+                View::Graph
+            };
+        }
         #[cfg(target_arch = "wasm32")]
         app.parse(Format::Keep);
         #[cfg(not(target_arch = "wasm32"))]
@@ -174,8 +198,18 @@ impl App {
                 continue;
             }
             let feedback_before = self.full_text.clone();
+            if let Ok(Output::SortedBoth(_, _, right)) = &done.result {
+                self.right_syntax_error = None;
+                self.right_json_valid = true;
+                self.right_pointer.clear();
+                self.right_caret_offset = None;
+                self.pending_right_source_offset = None;
+                self.compare_text = right.as_str().to_owned();
+                self.compare_search_source = right.clone();
+                self.search.right.changed();
+            }
             match done.result {
-                Ok(Output::Document(doc, graph)) => {
+                Ok(Output::Document(doc, graph) | Output::SortedBoth(doc, graph, _)) => {
                     self.syntax_error = None;
                     if let Some(target) = done.target {
                         self.pointer = target.clone();
@@ -254,12 +288,34 @@ impl App {
                         self.notify(feedback::Kind::Error, self.status.clone());
                     }
                 }
-                Ok(Output::Comparison(diffs, alignment, left, right)) => {
+                Ok(Output::Comparison(diffs, alignment, left, right, reordered)) => {
+                    let text =
+                        reordered.unwrap_or_else(|| Arc::new(alignment.right.source.clone()));
+                    if text.as_str() != self.compare_text {
+                        if self.review_original_right.is_none() {
+                            self.review_original_right = Some(Arc::new(self.compare_text.clone()));
+                        }
+                        self.compare_text = text.as_str().to_owned();
+                        self.compare_search_source = text;
+                        self.search.right.changed();
+                        self.right_caret_offset = None;
+                        self.pending_right_source_offset = None;
+                    }
                     self.syntax_error = None;
                     self.right_syntax_error = None;
                     self.right_json_valid = true;
                     self.error = false;
                     self.comparison_done = true;
+                    self.only_differences = self.review_focus.unwrap_or_else(|| {
+                        let changed = alignment
+                            .left
+                            .changed
+                            .iter()
+                            .chain(&alignment.right.changed)
+                            .filter(|value| **value)
+                            .count();
+                        alignment.height > 200 && changed > 0 && changed < alignment.height / 3
+                    });
                     self.compare_alignment = Some(alignment);
                     self.status = if diffs.is_empty() {
                         "Documents are equal".into()
@@ -281,8 +337,8 @@ impl App {
                     self.differences = diffs;
                     self.compare_selected = 0;
                     if let Some(difference) = self.differences.first() {
-                        self.pointer.clone_from(&difference.pointer);
-                        self.right_pointer.clone_from(&difference.pointer);
+                        self.pointer = difference.left_pointer.clone().unwrap_or_default();
+                        self.right_pointer = difference.right_pointer.clone().unwrap_or_default();
                     }
                     if done.user_action {
                         self.apply_diff_location(left, right);
@@ -380,6 +436,8 @@ impl App {
                     }
                 }
                 Ok(Output::RightText(text)) => {
+                    self.review_original_right = None;
+                    self.reset_sort_state();
                     self.right_syntax_error = None;
                     self.right_json_valid = true;
                     self.right_pointer.clear();
@@ -395,6 +453,9 @@ impl App {
                     self.edit_dialog = Some(dialog);
                 }
                 Err(error) => {
+                    if matches!(done.label, "Sort ascending" | "Sort descending") {
+                        self.reset_sort_state();
+                    }
                     if let Some(message) = error.strip_prefix("Left JSON: ") {
                         self.syntax_error = Some(jobs::SyntaxError::new(message, &self.full_text));
                     } else if let Some(message) = error.strip_prefix("Right JSON: ") {

@@ -73,11 +73,29 @@ impl SourceIndex {
     }
 
     pub fn pointer_at_offset(&self, offset: usize) -> Result<Option<String>, String> {
+        self.path_at_offset(offset, false)
+            .map(|path| path.map(|(pointer, _)| pointer))
+    }
+
+    /// Array insertions shift indexes; alignment matches their content instead.
+    pub(crate) fn alignment_path_at_offset(
+        &self,
+        offset: usize,
+    ) -> Result<Option<(String, bool)>, String> {
+        self.path_at_offset(offset, true)
+    }
+
+    fn path_at_offset(
+        &self,
+        offset: usize,
+        alignment: bool,
+    ) -> Result<Option<(String, bool)>, String> {
         if !self.root.range.contains(&offset) {
             return Ok(None);
         }
         let mut node = &self.root;
         let mut pointer = String::new();
+        let mut in_array = false;
         loop {
             let children = self.children(node)?;
             let index = children.partition_point(|child| child.bound <= offset);
@@ -87,6 +105,9 @@ impl SourceIndex {
             if self.text.as_bytes()[node.range.start] == b'{' {
                 if offset >= node.range.end - 1 {
                     break;
+                }
+                if alignment {
+                    crate::append_pointer(&mut pointer, "object");
                 }
                 crate::append_pointer(&mut pointer, &child.key);
                 if offset < child.range.start || offset > child.range.end {
@@ -99,11 +120,12 @@ impl SourceIndex {
                 {
                     break;
                 }
-                crate::append_pointer(&mut pointer, &child.key);
+                in_array = true;
+                crate::append_pointer(&mut pointer, if alignment { "array" } else { &child.key });
             }
             node = child;
         }
-        Ok(Some(pointer))
+        Ok(Some((pointer, in_array)))
     }
 
     pub fn source_range(&self, pointer: &str) -> Result<Range<usize>, String> {

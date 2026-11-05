@@ -55,6 +55,10 @@ fn blocks(text: &str) -> BTreeMap<usize, FoldBlock> {
 struct FoldState {
     sources: Vec<Arc<String>>,
     collapsed: BTreeMap<usize, usize>,
+    review: bool,
+    expanded: std::collections::BTreeSet<usize>,
+    generated: std::collections::BTreeSet<usize>,
+    regions: Vec<std::ops::Range<usize>>,
 }
 
 #[derive(Clone)]
@@ -65,6 +69,12 @@ struct FoldLayout {
     key: egui::Id,
     collapsed: BTreeMap<usize, usize>,
     result: Arc<egui::Galley>,
+    review: bool,
+    regions: Vec<std::ops::Range<usize>>,
+}
+
+pub(in crate::ui) fn reset_review_folds(ctx: &egui::Context) {
+    ctx.data_mut(|data| data.remove::<FoldState>(state_key(egui::Id::NULL, true)));
 }
 
 fn state_key(id: egui::Id, aligned: bool) -> egui::Id {
@@ -171,14 +181,49 @@ pub(in crate::ui) fn fold_galley(
             .map(|text| Arc::new((*text).to_owned()))
             .collect();
         state.collapsed.clear();
+        state.expanded.clear();
+        state.generated.clear();
         ui.ctx()
             .data_mut(|data| data.insert_temp(key, state.clone()));
     }
+    let review = alignment.is_some()
+        && ui.ctx().data(|data| {
+            data.get_temp::<bool>(egui::Id::new("forma_only_differences"))
+                .unwrap_or(false)
+        });
+    if review != state.review {
+        state.review = review;
+        state.collapsed.clear();
+        state.expanded.clear();
+        state.generated.clear();
+    }
+    let regions = alignment
+        .filter(|_| review)
+        .map_or_else(Vec::new, |a| a.unchanged_regions(3));
+    if regions != state.regions {
+        state.collapsed.clear();
+        state.expanded.clear();
+        state.generated.clear();
+        state.regions = regions.clone();
+    }
+    if let Some(alignment) = alignment.filter(|_| review) {
+        for range in alignment.unchanged_regions(3) {
+            state.generated.insert(range.start);
+            if !state.expanded.contains(&range.start) {
+                state.collapsed.insert(range.start, range.end - 1);
+            }
+        }
+    }
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(key, state.clone()));
     let cache_key = id.with("fold_layout");
     let previous = ui.ctx().data(|data| data.get_temp::<FoldLayout>(cache_key));
-    let same_base = previous
-        .as_ref()
-        .filter(|cache| Arc::ptr_eq(&cache.base, &galley) && cache.key == key);
+    let same_base = previous.as_ref().filter(|cache| {
+        Arc::ptr_eq(&cache.base, &galley)
+            && cache.key == key
+            && cache.review == review
+            && cache.regions == regions
+    });
     if let Some(cache) = same_base
         && cache.collapsed == state.collapsed
     {
@@ -193,7 +238,7 @@ pub(in crate::ui) fn fold_galley(
                 .copied()
                 .unwrap_or(line)
         };
-        let blocks = blocks(&galley.job.text)
+        let mut blocks: BTreeMap<_, _> = blocks(&galley.job.text)
             .into_iter()
             .map(|(line, block)| {
                 (
@@ -205,6 +250,24 @@ pub(in crate::ui) fn fold_galley(
                 )
             })
             .collect();
+        if let Some(alignment) = alignment.filter(|_| review) {
+            for range in alignment.unchanged_regions(3) {
+                if let Some((line, _)) = side.and_then(|side| {
+                    side.rows
+                        .iter()
+                        .enumerate()
+                        .find(|(_, row)| **row == range.start)
+                }) {
+                    blocks.insert(
+                        line,
+                        FoldBlock {
+                            start: range.start,
+                            end: range.end - 1,
+                        },
+                    );
+                }
+            }
+        }
         let mut line = 0;
         let lines = galley
             .rows
@@ -288,6 +351,8 @@ pub(in crate::ui) fn fold_galley(
                 key,
                 collapsed: state.collapsed,
                 result: result.clone(),
+                review,
+                regions,
             },
         )
     });
@@ -311,6 +376,10 @@ pub(super) fn paint_fold_toggle(
         return;
     };
     let collapsed = cache.collapsed.contains_key(&block.start);
+    let generated = ui
+        .ctx()
+        .data(|data| data.get_temp::<FoldState>(cache.key))
+        .is_some_and(|state| state.generated.contains(&block.start));
     if collapsed {
         let last = cache
             .lines
@@ -322,7 +391,14 @@ pub(super) fn paint_fold_toggle(
                     + row.pos.to_vec2()
                     + egui::vec2(row.size.x + 4.0, row.size.y * 0.5),
                 egui::Align2::LEFT_CENTER,
-                "…",
+                if generated {
+                    format!(
+                        "… {} unchanged lines · click chevron to expand",
+                        block.end.saturating_sub(block.start + 1)
+                    )
+                } else {
+                    "…".to_owned()
+                },
                 FontId::monospace(EDITOR_FONT_SIZE),
                 p.muted,
             );
@@ -335,7 +411,9 @@ pub(super) fn paint_fold_toggle(
             egui::Sense::click(),
         )
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(if collapsed {
+        .on_hover_text(if collapsed && generated {
+            "Show unchanged lines"
+        } else if collapsed {
             "Unfold JSON"
         } else {
             "Fold JSON"
@@ -370,6 +448,9 @@ pub(super) fn paint_fold_toggle(
             let mut state = data.get_temp::<FoldState>(cache.key).unwrap_or_default();
             if collapsed {
                 state.collapsed.remove(&block.start);
+                if state.generated.contains(&block.start) {
+                    state.expanded.insert(block.start);
+                }
             } else {
                 state.collapsed.insert(block.start, block.end);
             }

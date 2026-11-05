@@ -85,8 +85,11 @@ enum RemoteJob {
     Edit(DocRef, String, String, bool),
     Import(Arc<String>, String),
     Compare(Arc<String>, Arc<String>),
+    CompareOriginal(Arc<String>, Arc<String>),
+    CompareWithOptions(Arc<String>, Arc<String>, forma::review::Options),
     FormatRight(Arc<String>),
-    LocateDiff(Arc<String>, Arc<String>, String),
+    SortBoth(Arc<String>, Arc<String>, Format),
+    LocateDiff(Arc<String>, Arc<String>, forma::Difference),
 }
 impl RemoteJob {
     fn from_job(job: &Job, force: bool) -> Result<Self, String> {
@@ -112,7 +115,14 @@ impl RemoteJob {
             ),
             Job::Import(text, name) => Self::Import(text.clone(), name.clone()),
             Job::Compare(left, right) => Self::Compare(left.clone(), right.clone()),
+            Job::CompareOriginal(left, right) => Self::CompareOriginal(left.clone(), right.clone()),
+            Job::CompareWithOptions(left, right, options) => {
+                Self::CompareWithOptions(left.clone(), right.clone(), options.clone())
+            }
             Job::FormatRight(text) => Self::FormatRight(text.clone()),
+            Job::SortBoth(left, right, format) => {
+                Self::SortBoth(left.clone(), right.clone(), *format)
+            }
             Job::LocateDiff(left, right, pointer) => {
                 Self::LocateDiff(left.clone(), right.clone(), pointer.clone())
             }
@@ -136,7 +146,12 @@ impl RemoteJob {
             }
             Self::Import(text, name) => Job::Import(text, name),
             Self::Compare(left, right) => Job::Compare(left, right),
+            Self::CompareOriginal(left, right) => Job::CompareOriginal(left, right),
+            Self::CompareWithOptions(left, right, options) => {
+                Job::CompareWithOptions(left, right, options)
+            }
             Self::FormatRight(text) => Job::FormatRight(text),
+            Self::SortBoth(left, right, format) => Job::SortBoth(left, right, format),
             Self::LocateDiff(left, right, pointer) => Job::LocateDiff(left, right, pointer),
         })
     }
@@ -154,6 +169,7 @@ enum Reply {
         id: u32,
         text: Option<Arc<String>>,
         graph: Option<Arc<Graph>>,
+        right: Option<Arc<String>>,
     },
     Invalid(Option<Arc<String>>, String),
     InvalidComparison(
@@ -165,6 +181,7 @@ enum Reply {
         Arc<forma::alignment::Alignment>,
         Option<std::ops::Range<usize>>,
         Option<std::ops::Range<usize>>,
+        Option<Arc<String>>,
     ),
     RightText(Arc<String>),
     DiffLocation(
@@ -213,8 +230,13 @@ fn process_request(bytes: &[u8]) -> Result<Vec<u8>, String> {
     };
     log::debug!(target: "forma", "event=work_metadata revision={} user_action={} backend=web_worker", request.revision, request.user_action);
     let start = Instant::now();
-    let result = execute(job).map(|output| match output {
-        Output::Document(doc, graph) => {
+    let result = execute(job);
+    let right = match &result {
+        Ok(Output::SortedBoth(_, _, right)) => Some(right.clone()),
+        _ => None,
+    };
+    let result = result.map(|output| match output {
+        Output::Document(doc, graph) | Output::SortedBoth(doc, graph, _) => {
             let text = if original
                 .as_ref()
                 .is_some_and(|text| Arc::ptr_eq(text, &doc.text))
@@ -247,6 +269,7 @@ fn process_request(bytes: &[u8]) -> Result<Vec<u8>, String> {
                 id,
                 text,
                 graph: send_graph,
+                right,
             }
         }
         Output::Invalid(text, error) => Reply::Invalid(
@@ -260,8 +283,8 @@ fn process_request(bytes: &[u8]) -> Result<Vec<u8>, String> {
             },
             error,
         ),
-        Output::Comparison(diffs, alignment, left, right) => {
-            Reply::Comparison(diffs, alignment, left, right)
+        Output::Comparison(diffs, alignment, left, right, reordered) => {
+            Reply::Comparison(diffs, alignment, left, right, reordered)
         }
         Output::InvalidComparison(left, right) => Reply::InvalidComparison(left, right),
         Output::RightText(text) => Reply::RightText(text),
@@ -299,7 +322,12 @@ impl crate::worker::Task<Completed> for Work {
         };
         let result = response.result.and_then(|reply| {
             Ok(match reply {
-                Reply::Document { id, text, graph } => {
+                Reply::Document {
+                    id,
+                    text,
+                    graph,
+                    right,
+                } => {
                     let text = text
                         .or_else(|| source(&self.job))
                         .ok_or("Worker omitted source")?;
@@ -312,20 +340,28 @@ impl crate::worker::Task<Completed> for Work {
                     // The full value tree stays in the Worker. UI actions reference it by token.
                     let value = Arc::new(Value::Null);
                     register(&value, id);
-                    Output::Document(Document { text, value }, graph)
+                    let doc = Document { text, value };
+                    match right {
+                        Some(right) => Output::SortedBoth(doc, graph, right),
+                        None => Output::Document(doc, graph),
+                    }
                 }
                 Reply::Invalid(text, error) => Output::Invalid(
                     text.or_else(|| source(&self.job))
                         .ok_or("Worker omitted source")?,
                     error,
                 ),
-                Reply::Comparison(diffs, mut alignment, left, right) => {
-                    if let Job::Compare(a, b) = &self.job {
+                Reply::Comparison(diffs, mut alignment, left, right, reordered) => {
+                    if let Job::Compare(a, b)
+                    | Job::CompareOriginal(a, b)
+                    | Job::CompareWithOptions(a, b, _) = &self.job
+                    {
                         let alignment = Arc::make_mut(&mut alignment);
                         alignment.left.source = (**a).clone();
-                        alignment.right.source = (**b).clone();
+                        alignment.right.source =
+                            reordered.as_ref().unwrap_or(b).as_str().to_owned();
                     }
-                    Output::Comparison(diffs, alignment, left, right)
+                    Output::Comparison(diffs, alignment, left, right, reordered)
                 }
                 Reply::InvalidComparison(left, right) => Output::InvalidComparison(left, right),
                 Reply::RightText(text) => Output::RightText(text),

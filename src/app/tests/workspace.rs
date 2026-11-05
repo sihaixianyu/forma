@@ -1,6 +1,156 @@
 use super::*;
 
 #[test]
+fn slim_diff_bar_has_a_direct_focus_toggle_and_no_context_menu() {
+    let mut app = ready_app();
+    let (sender, receiver) = mpsc::channel();
+    app.jobs = sender.into();
+    app.editor = "{\"a\":1,\"b\":1}".into();
+    app.dirty = true;
+    app.parse(Format::Keep);
+    finish(&mut app, receiver.recv().unwrap());
+    app.view = View::Compare;
+    app.compare_text = "{\"a\":2,\"b\":2}".into();
+    app.start(
+        Job::Compare(app.full_text.clone(), Arc::new(app.compare_text.clone())),
+        false,
+    );
+    finish(&mut app, receiver.recv().unwrap());
+    let ctx = egui::Context::default();
+    ui::install_fonts(&ctx);
+    ui::configure(&ctx, false);
+    let frame = |app: &mut App, time, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1280.0, 800.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.workspace(ctx),
+        )
+    };
+    let find = |output: &egui::FullOutput, label: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.job.text == label
+                {
+                    Some(text.pos + text.galley.rect.center().to_vec2())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| panic!("missing control {label}"))
+    };
+    let click = |pos, button, pressed| {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    };
+    let output = frame(&mut app, 0.0, vec![]);
+    let bar = find(&output, "Difference 1 / 2");
+    let only = find(&output, "Diff Only");
+    assert!(
+        output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::LineSegment { points, .. }
+            if (points[0].x - 640.0).abs() < 0.5 && (points[1].x - 640.0).abs() < 0.5
+                && ((points[1].y - points[0].y).abs() - 26.0).abs() < 0.5
+        )),
+        "center divider must remain visible through the DIFF bar"
+    );
+    assert!((bar.y - only.y).abs() < 6.0);
+    assert!(
+        only.x - bar.x > 150.0,
+        "summary/navigation and focus toggle should be spread across the bar"
+    );
+    let font = |label: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.galley.job.sections[0].format.font_id.clone())
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(font("Difference 1 / 2"), font("Diff Only"));
+    let backgrounds: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect)
+                if (rect.rect.height() - 26.0).abs() < 0.5 && rect.rect.contains(bar) =>
+            {
+                Some(rect.rect)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        backgrounds
+            .iter()
+            .any(|rect| rect.left().abs() < 0.5 && (rect.right() - 640.0).abs() < 0.5),
+        "DIFF background should span the same half-width as the Path footer"
+    );
+    assert!(
+        app.source_header_height <= 34.0,
+        "DIFF bar should stay slim: {}",
+        app.source_header_height
+    );
+    frame(
+        &mut app,
+        0.1,
+        click(only, egui::PointerButton::Primary, true),
+    );
+    frame(
+        &mut app,
+        0.2,
+        click(only, egui::PointerButton::Primary, false),
+    );
+    assert_eq!(app.review_focus, Some(true));
+    frame(
+        &mut app,
+        0.3,
+        click(bar, egui::PointerButton::Secondary, true),
+    );
+    frame(
+        &mut app,
+        0.4,
+        click(bar, egui::PointerButton::Secondary, false),
+    );
+    let output = frame(&mut app, 0.5, vec![]);
+    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text)
+        if ["Only differences", "Changes list", "Filter by path", "Array matching…"].contains(&text.galley.job.text.as_str())
+    )));
+    let next = find(&output, "›");
+    frame(
+        &mut app,
+        0.6,
+        click(next, egui::PointerButton::Primary, true),
+    );
+    frame(
+        &mut app,
+        0.7,
+        click(next, egui::PointerButton::Primary, false),
+    );
+    assert_eq!(app.compare_selected, 1);
+}
+
+#[test]
 fn comparison_footer_reports_each_inputs_own_json_status() {
     let mut app = ready_app();
     app.view = View::Compare;
@@ -487,6 +637,9 @@ fn pending_and_equal_comparisons_start_both_editors_without_a_header_gap() {
             })
             .collect();
         assert_eq!(editors.len(), 2);
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if ["Array matching", "Only differences", "Changes list", "Filter by path"].contains(&text.galley.job.text.as_str())
+        )), "review controls must stay inside the existing Compare context menu");
         assert!(
             editors.iter().all(|editor| editor.pos.y < 45.0),
             "pending/equal editors should start below the 36px app header: {:?}",
@@ -577,16 +730,27 @@ fn compare_rows_and_gutters_remain_aligned_when_scrolling_the_right_editor() {
             .iter()
             .find(|text| text.galley.job.text == app.compare_text)
             .unwrap();
-        // The shared row after the two inserted lines has the same screen position.
+        // The shared value stays aligned after array elements have been matched.
+        let right_row = right
+            .galley
+            .rows
+            .iter()
+            .find(|row| {
+                row.glyphs
+                    .iter()
+                    .map(|glyph| glyph.chr)
+                    .collect::<String>()
+                    .trim()
+                    == "2,"
+            })
+            .unwrap();
         assert!(
-            (left.pos.y + left.galley.rows[3].pos.y - right.pos.y - right.galley.rows[5].pos.y)
-                .abs()
-                < 0.5,
+            (left.pos.y + left.galley.rows[3].pos.y - right.pos.y - right_row.pos.y).abs() < 0.5,
             "frame {frame}: left {:?} row {}; right {:?} row {}; shared scroll {}",
             left.pos,
             left.galley.rows[3].pos.y,
             right.pos,
-            right.galley.rows[5].pos.y,
+            right_row.pos.y,
             app.compare_scroll
         );
         if frame == 0 {
@@ -624,7 +788,7 @@ fn pasted_json_automatically_highlights_without_moving_the_editor_cursor() {
     assert!(receiver.try_recv().is_err());
     app.tick_automatic_jobs(due);
     let work = receiver.recv().unwrap();
-    assert!(matches!(work.job, Job::Compare(..)));
+    assert!(matches!(work.job, Job::CompareWithOptions(..)));
     assert!(!work.user_action);
     finish(&mut app, work);
     assert!(app.comparison_done);
@@ -916,7 +1080,8 @@ fn large_comparison_scrollbar_drag_keeps_both_editors_visible_and_linked() {
                 !shape.galley.rows.is_empty(),
                 "the viewport must never be blank"
             );
-            assert!(shape.galley.rows.len() < 40);
+            let visible_rows = (clip.height() / app.editor_typography.line_height).ceil() as usize;
+            assert!(shape.galley.rows.len() <= visible_rows + 4);
             assert!(
                 shape
                     .galley

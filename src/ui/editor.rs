@@ -3,6 +3,7 @@ use super::*;
 mod viewport;
 use viewport::{code_rows, paint_visible_rows};
 mod folding;
+pub(super) use folding::reset_review_folds;
 pub(super) use folding::{expand_editor_folds, fold_galley};
 
 pub(super) fn editor_id_key(salt: &str) -> egui::Id {
@@ -156,6 +157,8 @@ pub(super) fn prepare_code_input(ui: &egui::Ui, salt: &str, text: &mut String) -
             )
         })
     }) {
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(egui::Id::new("forma_only_differences"), false));
         expand_editor_folds(ui.ctx(), id);
     }
     let mut state = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
@@ -278,10 +281,21 @@ pub(super) fn show_code_editor(
             .any(|event| matches!(event, egui::Event::Paste(_)))
     });
     let mut output = editor.show(ui);
-    if pasting && output.response.changed() {
-        // TextEdit follows the caret to the end of inserted text. Keep the current
-        // viewport on paste so a large document can be read from where it was pasted.
-        ui.scroll_to_rect(ui.clip_rect(), None);
+    if pasting && output.response.has_focus() && output.response.sense.interactive() {
+        let root = egui::text::CCursorRange::one(egui::text::CCursor::new(0));
+        output.state.cursor.set_char_range(Some(root));
+        output.cursor_range = Some(root);
+        output.state.clone().store(ui.ctx(), output.response.id);
+        let target = output
+            .galley
+            .pos_from_cursor(root.primary)
+            .translate(output.galley_pos.to_vec2());
+        // Replace TextEdit's end-of-paste scroll request in the same frame.
+        ui.scroll_to_rect_animation(
+            target,
+            Some(egui::Align::TOP),
+            egui::style::ScrollAnimation::none(),
+        );
     }
     paint_visible_rows(ui, first_shape, &output.galley);
     ui.visuals_mut().text_cursor.stroke = stroke;
@@ -466,6 +480,12 @@ pub(super) fn editor_scroll(
             egui::ScrollArea::both()
         })
         .id_salt(view.salt)
+        .animated(!ui.input(|input| {
+            input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Paste(_)))
+        }))
         .auto_shrink([false, false])
         .max_height(view.height);
         if let Some(offset) = view.offset {
@@ -551,6 +571,9 @@ pub(super) fn editor_scroll(
             .galley
             .rows
             .partition_point(|row| output.galley_pos.y + row.pos.y + row.size.y < gutter.top());
+        let mut previous_bottom = first.checked_sub(1).map_or(output.galley_pos.y, |i| {
+            output.galley_pos.y + output.galley.rows[i].pos.y + output.galley.rows[i].size.y
+        });
         for (visual_row, row) in output.galley.rows.iter().enumerate().skip(first) {
             let index = rows.lines[visual_row];
             let number = visual_row == 0 || output.galley.rows[visual_row - 1].ends_with_newline;
@@ -558,6 +581,17 @@ pub(super) fn editor_scroll(
             if y > gutter.bottom() {
                 break;
             }
+            if side.is_some() && y > previous_bottom + 0.5 {
+                let gap = egui::Rect::from_min_max(
+                    egui::pos2(scroll.inner_rect.left(), previous_bottom),
+                    egui::pos2(scroll.inner_rect.right(), y),
+                )
+                .intersect(scroll.inner_rect);
+                if gap.is_positive() {
+                    text_painter.rect_filled(gap, 0, p.muted.gamma_multiply(0.08));
+                }
+            }
+            previous_bottom = y + row.size.y;
             if row.size.y == 0.0 || y + row.size.y < gutter.top() {
                 continue;
             }
@@ -642,13 +676,24 @@ pub(super) fn editor_scroll(
             }
             let changed = side.is_some_and(|side| side.changed.get(index) == Some(&true));
             if changed {
-                let marker = egui::Rect::from_min_size(
-                    egui::pos2(gutter.left() + 3.0, y),
-                    Vec2::new(3.0, row.size.y),
-                )
-                .intersect(gutter.shrink2(Vec2::new(0.0, 8.0)));
-                if marker.is_positive() {
-                    painter.rect_filled(marker, 2, color);
+                let kind = side
+                    .and_then(|side| side.kinds.get(index))
+                    .copied()
+                    .flatten();
+                if number {
+                    painter.text(
+                        egui::pos2(gutter.left() + 9.0, y + row.size.y * 0.5),
+                        egui::Align2::CENTER_CENTER,
+                        if kind == Some(forma::review::ChangeKind::Moved) {
+                            "↕"
+                        } else if view.left {
+                            "−"
+                        } else {
+                            "+"
+                        },
+                        FontId::monospace(view.font_size),
+                        color,
+                    );
                 }
                 text_painter.rect_filled(
                     egui::Rect::from_min_size(
@@ -656,7 +701,15 @@ pub(super) fn editor_scroll(
                         Vec2::new(scroll.inner_rect.width(), row.size.y),
                     ),
                     0,
-                    color.gamma_multiply(0.06),
+                    color.gamma_multiply(if ui.visuals().dark_mode { 0.24 } else { 0.18 }),
+                );
+                text_painter.rect_filled(
+                    egui::Rect::from_min_size(
+                        egui::pos2(scroll.inner_rect.left(), y),
+                        Vec2::new(3.0, row.size.y),
+                    ),
+                    0,
+                    color,
                 );
             }
             if number {
@@ -724,24 +777,11 @@ pub(super) fn highlight_difference(
         if range.start >= base + end || range.end <= base + start {
             continue;
         }
-        let a = range.start.max(base + start) - base;
-        let b = range.end.min(base + end) - base;
-        let (Some(before), Some(found)) = (text.get(start..a), text.get(a..b)) else {
-            continue;
-        };
-        let column = before.chars().count();
-        let left = row.pos.x + row.x_offset(column);
-        let right = row.pos.x + row.x_offset(column + found.chars().count());
-        let rect = egui::Rect::from_min_max(
-            egui::pos2(left, row.pos.y),
-            egui::pos2(right.max(left + 3.0), row.pos.y + row.size.y),
-        )
-        .translate(output.galley_pos.to_vec2());
-        painter.rect_filled(rect, 2, color.gamma_multiply(0.12));
-        painter.line_segment(
-            [rect.left_bottom(), rect.right_bottom()],
-            Stroke::new(1.5_f32, color),
+        let marker = egui::Rect::from_min_size(
+            egui::pos2(clip.left(), output.galley_pos.y + row.pos.y),
+            Vec2::new(2.0, row.size.y),
         );
+        painter.rect_filled(marker, 0, color);
     }
 }
 

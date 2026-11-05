@@ -3,6 +3,12 @@ use super::*;
 impl App {
     pub fn workspace(&mut self, ctx: &egui::Context) {
         let p = palette(self.dark);
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new("forma_only_differences"),
+                self.only_differences && self.view == View::Compare,
+            )
+        });
         if ctx.input(|input| input.pointer.any_pressed())
             && let Some(mouse) = ctx.input(|input| input.pointer.interact_pos())
         {
@@ -190,6 +196,16 @@ impl App {
                 }
                 self.path_footer(ui, full_area, p);
             });
+        if self.view == View::Compare {
+            let enabled = ctx.data(|data| {
+                data.get_temp::<bool>(egui::Id::new("forma_only_differences"))
+                    .unwrap_or(false)
+            });
+            if self.only_differences && !enabled {
+                self.review_focus = Some(false);
+            }
+            self.only_differences = enabled;
+        }
         if format_requested {
             if self.active_right && self.view == View::Compare {
                 preserve_editor_undo(ctx, "compare_editor", &self.compare_text);
@@ -376,20 +392,26 @@ impl App {
     }
 
     pub(super) fn path_bar(&self, ui: &mut egui::Ui, p: Palette, right_input: bool) {
-        let difference = || {
+        let difference = |right: bool| {
             self.differences
                 .get(self.compare_selected)
-                .map(|difference| difference.pointer.as_str())
+                .and_then(|difference| {
+                    if right {
+                        difference.right_pointer.as_deref()
+                    } else {
+                        difference.left_pointer.as_deref()
+                    }
+                })
         };
         let pointer = if self.view == View::Compare && right_input {
             (!self.right_pointer.is_empty())
                 .then_some(self.right_pointer.as_str())
-                .or_else(difference)
+                .or_else(|| difference(true))
                 .unwrap_or("")
         } else if self.view == View::Compare {
             (!self.pointer.is_empty())
                 .then_some(self.pointer.as_str())
-                .or_else(difference)
+                .or_else(|| difference(false))
                 .unwrap_or("")
         } else {
             &self.pointer
@@ -418,11 +440,12 @@ impl App {
             } else {
                 full_path.clone()
             };
-            ui.add(
+            let response = ui.add(
                 egui::Label::new(RichText::new(&path).monospace().size(12.0).color(p.text))
-                    .truncate(),
-            )
-            .on_hover_text(full_path);
+                    .truncate()
+                    .show_tooltip_when_elided(false),
+            );
+            crate::ui::decode_ui::show_path(&response, &full_path);
         });
     }
 

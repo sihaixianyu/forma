@@ -60,6 +60,12 @@ pub(crate) struct App {
     pub(crate) active_right: bool,
     pub(crate) sort_state: SortState,
     pub(crate) sort_original: Option<String>,
+    pub(crate) sort_right_original: Option<String>,
+    pub(crate) keep_compare_order: bool,
+    pub(crate) review_original_right: Option<Arc<String>>,
+    pub(crate) review_options: forma::review::Options,
+    pub(crate) only_differences: bool,
+    pub(crate) review_focus: Option<bool>,
     pub(crate) compare_text: String,
     pub(crate) right_json_valid: bool,
     pub(crate) compare_code: ui::CodeCache,
@@ -78,6 +84,8 @@ pub(crate) struct App {
     pub(crate) comparison_done: bool,
     #[cfg(target_arch = "wasm32")]
     pub(crate) files: crate::browser::Files,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) saved_inputs: Option<(u64, usize, usize, bool)>,
     pub(crate) jobs: worker::Sender<Work>,
     pub(crate) revision: u64,
     pub(crate) auto_due: Option<Instant>,

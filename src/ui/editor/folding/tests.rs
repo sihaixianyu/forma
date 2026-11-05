@@ -1,5 +1,96 @@
 use super::*;
 
+#[test]
+fn only_differences_preserves_source_context_and_synchronized_expansion() {
+    let ctx = egui::Context::default();
+    configure(&ctx, false);
+    let left: serde_json::Value = (0..100)
+        .map(|id| serde_json::json!({"id":id,"v":"中文 unchanged"}))
+        .collect();
+    let mut right = left.clone();
+    right[50]["v"] = serde_json::json!("中文 changed long long long value");
+    let left_text = Arc::new(serde_json::to_string_pretty(&left).unwrap());
+    let right_text = Arc::new(serde_json::to_string_pretty(&right).unwrap());
+    let report = forma::review::build(
+        left_text.clone(),
+        right_text,
+        &left,
+        right,
+        &Default::default(),
+        true,
+        1000,
+    )
+    .unwrap();
+    let alignment = Arc::new(report.alignment);
+    let mut a_cache = CodeCache::default();
+    let mut b_cache = CodeCache::default();
+    let a_id = egui::Id::new("review_fold_left");
+    let b_id = egui::Id::new("review_fold_right");
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            for width in [140.0, 260.0] {
+                reset_review_folds(ctx);
+                ctx.data_mut(|data| {
+                    data.insert_temp(egui::Id::new("forma_only_differences"), true)
+                });
+                let a = a_cache.layout_width(ui, &alignment.left.source, false, "", width);
+                let b = b_cache.layout_width(ui, &alignment.right.source, false, "", width);
+                let a = a_cache.align(
+                    ui,
+                    a,
+                    Some(&alignment),
+                    true,
+                    &alignment.right.source,
+                    width,
+                );
+                let b = b_cache.align(
+                    ui,
+                    b,
+                    Some(&alignment),
+                    false,
+                    &alignment.left.source,
+                    width,
+                );
+                let folded_a = fold_galley(ui, a_id, a.clone(), Some(&alignment), true);
+                let folded_b = fold_galley(ui, b_id, b.clone(), Some(&alignment), false);
+                assert_eq!(folded_a.size().y, folded_b.size().y);
+                assert!(folded_a.size().y < a.size().y / 2.0);
+                assert_eq!(folded_a.job.text, *left_text);
+                assert_eq!(folded_a.end().index, left_text.chars().count());
+                let character = left_text
+                    [..report.differences[0].left_range.clone().unwrap().start]
+                    .chars()
+                    .count();
+                assert!(
+                    folded_a
+                        .pos_from_cursor(egui::text::CCursor::new(character))
+                        .height()
+                        > 0.0
+                );
+                let key = state_key(a_id, true);
+                ctx.data_mut(|data| {
+                    let mut state = data.get_temp::<FoldState>(key).unwrap();
+                    let first = *state.generated.first().unwrap();
+                    state.expanded.insert(first);
+                    state.collapsed.remove(&first);
+                    data.insert_temp(key, state);
+                });
+                let expanded_a = fold_galley(ui, a_id, a.clone(), Some(&alignment), true);
+                let expanded_b = fold_galley(ui, b_id, b.clone(), Some(&alignment), false);
+                assert!(expanded_a.size().y > folded_a.size().y);
+                assert_eq!(expanded_a.size().y, expanded_b.size().y);
+                ctx.data_mut(|data| {
+                    data.insert_temp(egui::Id::new("forma_only_differences"), false)
+                });
+                assert!(Arc::ptr_eq(
+                    &a,
+                    &fold_galley(ui, a_id, a.clone(), Some(&alignment), true)
+                ));
+            }
+        });
+    });
+}
+
 fn collapse(ctx: &egui::Context, id: egui::Id, line: usize) {
     let cache = ctx
         .data(|data| data.get_temp::<FoldLayout>(id.with("fold_layout")))

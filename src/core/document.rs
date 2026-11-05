@@ -73,10 +73,19 @@ fn sort(value: &mut Value, descending: bool) {
             for child in map.values_mut() {
                 sort(child, descending);
             }
-            map.sort_keys();
+            let ordered = map
+                .keys()
+                .is_sorted_by(|a, b| if descending { a >= b } else { a <= b });
+            if ordered {
+                return;
+            }
             if descending {
                 let old = std::mem::take(map);
-                *map = old.into_iter().rev().collect();
+                let mut entries: Vec<_> = old.into_iter().collect();
+                entries.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+                *map = entries.into_iter().collect();
+            } else {
+                map.sort_keys();
             }
         }
         Value::Array(array) => array.iter_mut().for_each(|value| sort(value, descending)),

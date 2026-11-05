@@ -67,12 +67,16 @@ impl App {
                 self.parse(Format::Nested);
             }
             segment_divider(ui, p, 16.0);
-            let sort = sort_button(ui, p, self.sort_state, compact)
-                .on_hover_text("Click to cycle: original → ascending → descending → original");
+            let sort = sort_button(ui, p, self.sort_state, compact).on_hover_text(
+                "Sort both comparison panes · original → ascending → descending → original",
+            );
             if sort.clicked() {
                 let state = self.sort_state.after_single_click();
                 if state == SortState::Original {
                     preserve_editor_undo(ui.ctx(), "json_source", &self.editor);
+                    if self.view == View::Compare {
+                        preserve_editor_undo(ui.ctx(), "compare_editor", &self.compare_text);
+                    }
                 }
                 self.apply_sort_state(state);
             }

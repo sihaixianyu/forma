@@ -5,15 +5,32 @@ fn long_paste_preserves_viewport_but_typing_still_follows_the_caret() {
     let ctx = egui::Context::default();
     configure(&ctx, false);
     let id = egui::Id::new("paste_scroll_test");
-    let mut text = String::new();
     let pasted = format!("[\n{}\n]", vec!["  {\"value\": \"中文\"}"; 500].join(",\n"));
+    let mut text = pasted.clone();
     for frame in 0..30 {
         let events = match frame {
             1 => {
                 ctx.memory_mut(|memory| memory.request_focus(id));
+                let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap();
+                state
+                    .cursor
+                    .set_char_range(Some(egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(0),
+                        egui::text::CCursor::new(text.chars().count()),
+                    )));
+                state.store(&ctx, id);
                 vec![egui::Event::Paste(pasted.clone())]
             }
-            15 => vec![egui::Event::Text(" ".into())],
+            15 => {
+                let mut state = egui::text_edit::TextEditState::load(&ctx, id).unwrap();
+                state
+                    .cursor
+                    .set_char_range(Some(egui::text::CCursorRange::one(
+                        egui::text::CCursor::new(pasted.chars().count()),
+                    )));
+                state.store(&ctx, id);
+                vec![egui::Event::Text(" ".into())]
+            }
             _ => vec![],
         };
         let _ = ctx.run(
@@ -28,20 +45,24 @@ fn long_paste_preserves_viewport_but_typing_still_follows_the_caret() {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let scroll = egui::ScrollArea::vertical()
+                    let mut area = egui::ScrollArea::vertical()
                         .max_height(160.0)
-                        .show(ui, |ui| {
-                            show_code_editor(
-                                ui,
-                                "paste_scroll_test",
-                                false,
-                                EDITOR_LINE_HEIGHT,
-                                egui::TextEdit::multiline(&mut text)
-                                    .id(id)
-                                    .code_editor()
-                                    .desired_rows(1),
-                            )
-                        });
+                        .animated(frame != 1);
+                    if frame == 0 {
+                        area = area.vertical_scroll_offset(400.0);
+                    }
+                    let scroll = area.show(ui, |ui| {
+                        show_code_editor(
+                            ui,
+                            "paste_scroll_test",
+                            false,
+                            EDITOR_LINE_HEIGHT,
+                            egui::TextEdit::multiline(&mut text)
+                                .id(id)
+                                .code_editor()
+                                .desired_rows(1),
+                        )
+                    });
                     if (1..15).contains(&frame) {
                         assert_eq!(
                             scroll.state.offset.y, 0.0,
@@ -56,7 +77,7 @@ fn long_paste_preserves_viewport_but_typing_still_follows_the_caret() {
                                 .unwrap()
                                 .primary
                                 .index,
-                            pasted.chars().count()
+                            0
                         );
                     }
                     if frame == 29 {

@@ -9,8 +9,8 @@ use crate::ui::feedback;
 use crate::{canvas, ui, worker};
 use eframe::egui;
 use forma::{
-    Difference, Document, EDIT_LIMIT, Format, PREVIEW_LIMIT, compare, csv_to_json, format_document,
-    preview, process,
+    Difference, Document, EDIT_LIMIT, Format, PREVIEW_LIMIT, csv_to_json, format_document, preview,
+    process,
 };
 use jobs::*;
 #[cfg(not(target_arch = "wasm32"))]
@@ -144,6 +144,31 @@ impl eframe::App for App {
             }
         }
         self.workspace(ctx);
+        #[cfg(target_arch = "wasm32")]
+        {
+            let key = (
+                self.revision,
+                Arc::as_ptr(&self.full_text) as usize,
+                Arc::as_ptr(&self.compare_search_source) as usize,
+                self.view == View::Compare,
+            );
+            if self.saved_inputs != Some(key) {
+                let left = if self.dirty {
+                    &self.editor
+                } else {
+                    &self.full_text
+                };
+                let right = self
+                    .review_original_right
+                    .as_deref()
+                    .map_or(self.compare_text.as_str(), String::as_str);
+                crate::browser::session::save(left, right, self.view == View::Compare);
+                self.saved_inputs = Some(key);
+            }
+            if let Some(error) = crate::browser::session::error() {
+                self.notify(feedback::Kind::Error, error);
+            }
+        }
         if self.auto_due.is_some() || (self.view == View::Compare && self.compare_due.is_some()) {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
@@ -154,11 +179,24 @@ impl App {
     pub(crate) fn reset_sort_state(&mut self) {
         self.sort_state = SortState::Original;
         self.sort_original = None;
+        self.sort_right_original = None;
+        self.keep_compare_order = false;
     }
 
     pub(crate) fn apply_sort_state(&mut self, state: SortState) {
+        self.review_original_right = None;
         if state == SortState::Original {
             if let Some(original) = self.sort_original.take() {
+                self.keep_compare_order = true;
+                if let Some(right) = self.sort_right_original.take() {
+                    self.sort_state = SortState::Original;
+                    self.submit(Job::SortBoth(
+                        Arc::new(original),
+                        Arc::new(right),
+                        Format::Keep,
+                    ));
+                    return;
+                }
                 self.editor = original;
                 self.dirty = true;
                 self.sort_state = SortState::Original;
@@ -170,11 +208,26 @@ impl App {
             self.sort_original = Some((*self.source()).clone());
         }
         self.sort_state = state;
-        self.parse(match state {
+        self.keep_compare_order = false;
+        let format = match state {
             SortState::Ascending => Format::SortAscending,
             SortState::Descending => Format::SortDescending,
             SortState::Original => Format::Keep,
-        });
+        };
+        if self.view == View::Compare && !self.compare_text.trim().is_empty() {
+            if self.sort_right_original.is_none() {
+                self.sort_right_original = Some(self.compare_text.clone());
+            }
+            let left = self.source();
+            self.auto_due = None;
+            self.submit(Job::SortBoth(
+                left,
+                Arc::new(self.compare_text.clone()),
+                format,
+            ));
+        } else {
+            self.parse(format);
+        }
     }
 
     pub(crate) fn set_theme_preference(
@@ -235,10 +288,19 @@ impl App {
             } else {
                 self.compare_due = None;
                 let left = self.source();
-                self.start(
-                    Job::Compare(left, Arc::new(self.compare_text.clone())),
-                    false,
-                );
+                let right = if self.keep_compare_order {
+                    Arc::new(self.compare_text.clone())
+                } else {
+                    self.review_original_right
+                        .clone()
+                        .unwrap_or_else(|| Arc::new(self.compare_text.clone()))
+                };
+                let job = if self.keep_compare_order {
+                    Job::CompareOriginal(left, right)
+                } else {
+                    Job::CompareWithOptions(left, right, self.review_options.clone())
+                };
+                self.start(job, false);
             }
         }
     }
@@ -296,7 +358,10 @@ impl App {
             job => job,
         };
         let label = job.label();
-        if matches!(job, Job::Compare(..)) {
+        if matches!(
+            job,
+            Job::Compare(..) | Job::CompareOriginal(..) | Job::CompareWithOptions(..)
+        ) {
             self.compare_due = None;
         }
         let quiet = matches!(

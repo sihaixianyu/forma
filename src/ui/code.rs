@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) const EDITOR_FONT_SIZE: f32 = 12.0;
-pub(super) const EDITOR_LINE_HEIGHT: f32 = 20.0;
+pub(super) const EDITOR_LINE_HEIGHT: f32 = 18.0;
 
 // epaint accumulates unwrapped paragraph x coordinates as f32 before wrapping.
 // Millions of glyphs eventually stop advancing and collapse into one huge row.
