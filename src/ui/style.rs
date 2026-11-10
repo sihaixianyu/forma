@@ -58,14 +58,14 @@ pub fn install_fonts(ctx: &egui::Context) {
         .or_default()
         .push("Maple Mono CN".into());
     fonts.font_data.insert(
-        "Pixelify Sans Bold".into(),
+        "Audiowide".into(),
         Arc::new(egui::FontData::from_static(include_bytes!(
-            "../../assets/fonts/PixelifySans-Bold.ttf"
+            "../../assets/fonts/Audiowide-Regular.ttf"
         ))),
     );
     fonts.families.insert(
         egui::FontFamily::Name("Brand".into()),
-        vec!["Pixelify Sans Bold".into(), "Inter".into()],
+        vec!["Audiowide".into(), "Inter".into()],
     );
     ctx.set_fonts(fonts);
 }
@@ -105,7 +105,7 @@ pub(crate) fn palette(dark: bool) -> Palette {
             muted: Color32::from_rgb(139, 145, 157),
             accent: Color32::from_rgb(115, 173, 233),
             tint: Color32::from_rgb(59, 64, 72),
-            selected: Color32::from_rgb(41, 59, 91),
+            selected: Color32::from_rgb(48, 89, 150),
             green: Color32::from_rgb(48, 216, 138),
             string: Color32::from_rgb(161, 193, 129),
             amber: Color32::from_rgb(223, 193, 132),
@@ -126,7 +126,7 @@ pub(crate) fn palette(dark: bool) -> Palette {
             muted: Color32::from_rgb(119, 121, 128),
             accent: Color32::from_rgb(91, 121, 227),
             tint: Color32::from_rgb(223, 223, 224),
-            selected: Color32::from_rgb(217, 220, 234),
+            selected: Color32::from_rgb(160, 195, 245),
             green: Color32::from_rgb(22, 134, 75),
             string: Color32::from_rgb(100, 159, 87),
             amber: Color32::from_rgb(173, 110, 37),

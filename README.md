@@ -12,9 +12,10 @@ documents for an automatic, aligned comparison.
 | ![Light graph view](docs/screenshots/light.png) | ![Dark graph view](docs/screenshots/dark.png) |
 | ![Light comparison](docs/screenshots/compare-light.png) | ![Dark comparison](docs/screenshots/compare-dark.png) |
 
-Pixelify Sans Bold for the title, Inter for UI, and Maple Mono CN for code.
+Audiowide for the title, Inter for UI, and Maple Mono CN for code.
 The app follows the system theme by default; click the lamp in the top-right
-toolbar to switch between a soft off-white theme and a dark theme.
+toolbar to switch between Zed One Light and Zed One Dark. Syntax uses the original
+Zed One colors; blue text-selection backgrounds stand apart from the red/green diff.
 
 The compact top bar contains the logo, title and GitHub link on the left,
 an animated Graph / Compare selector aligned with the editor divider, and
@@ -33,7 +34,7 @@ features, controls, keyboard shortcuts, project links and run instructions from 
 - **Automatic comparison:** paste JSON on the right; shared object keys follow the left pane's order. Arrays automatically use a shared unique `id`, `_id`, `key` or `name` when available, then exact and similar content. Additions, removals, value/type changes and moves share one comparison model for row alignment, highlights, counts and navigation. Original right-side positions are retained when arranging the display.
 - **Focused review:** the slim DIFF bar includes a **Diff Only** toggle. Long documents with a few changes automatically fold unchanged regions, retaining three context lines; use the gutter chevron to expand them. Editing expands the full input. Array matching is automatic, with no configuration controls or context menus; ambiguous matches are identified in the selected difference's tooltip.
 - **Paste at the root:** pasting JSON places the caret and view at the document root immediately, without an animated trip to the end and back. Typing and keyboard navigation still scroll to follow the caret.
-- **Git-style diff:** removed and added lines use red/green backgrounds and `−` / `+` gutter markers. Highlighting stays at line level; alignment gaps stay blank, and each pane reports its changed-line count.
+- **Git-style diff:** removed and added lines use stronger red/green backgrounds, colored edge bars and `−` / `+` gutter markers. Highlighting stays at line level; alignment gaps stay blank, and each pane reports its changed-line count.
 - **Restore browser inputs:** both inputs and the Graph/Compare mode are saved locally in IndexedDB as they change and restored after refresh or a development rebuild. Use the same browser and site address; storage failures appear in the app.
 - **Graph ↔ source navigation:** the initial view fits the graph overview into the pane. Click a value to locate it on either side, drag to pan, or double-click a card to fold or unfold its branch. Arrays retain indexed element nodes. Selecting a branch beyond the initial graph preview loads its local graph.
 - **Fast editing workflow:** Format, Minify, Expand JSON encoded in strings, and a three-state recursive Sort: click to cycle through original order, ascending, descending, and back to the exact original text. In Compare mode, Sort applies to both panes and restores each pane's original text. The Sort icon highlights the active direction. **Ctrl/Cmd + S** formats the active editor; **Ctrl/Cmd + Z** undoes, **Ctrl/Cmd + Shift + Z** or **Ctrl/Cmd + Y** redoes. Tab indents with two spaces. **Ctrl/Cmd + F** toggles search; **Ctrl/Cmd + wheel** zooms the graph.
@@ -103,7 +104,7 @@ Debug builds automatically record the low-volume caret/Path/Graph trace. Native
 `cargo run` writes `forma-debug.log`; set `FORMA_LOG_FILE=/path/to/file` to change it.
 Full timing logs remain opt-in with `FORMA_LOG=debug`. Web debug builds write the
 navigation trace to DevTools Console. For an agent-readable local Web log, start
-with `python3 scripts/debug-web.py`; events are written to `forma-debug.log`.
+with `python3 scripts/debug-web.py --open`; events are written to `forma-debug.log`.
 Release Web builds require `?debug=1`.
 [Log fields and performance analysis](docs/debug.md).
 

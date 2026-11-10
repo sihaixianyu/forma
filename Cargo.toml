@@ -91,3 +91,6 @@ harness = false
 name = "comparison"
 path = "bench/comparison.rs"
 harness = false
+
+[patch.crates-io]
+egui = { path = "vendor/egui" }
