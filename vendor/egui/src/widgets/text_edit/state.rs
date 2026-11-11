@@ -37,6 +37,10 @@ pub struct TextEditState {
     /// Controls the text selection.
     pub cursor: TextCursorState,
 
+    /// Skip internal undo snapshots when the application owns undo history.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub external_undo: bool,
+
     /// Wrapped in Arc for cheaper clones.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub(crate) undoer: Arc<Mutex<TextEditUndoer>>,

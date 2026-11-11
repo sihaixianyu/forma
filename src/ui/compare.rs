@@ -342,7 +342,7 @@ impl App {
                     decoded_hover(ui, &output, &self.compare_text);
                     if !output.response.changed()
                         && output.response.has_focus()
-                        && let Some(offset) = caret_source_offset(&output, &self.compare_text)
+                        && let Some(offset) = caret_source_offset(ui, &output, &self.compare_text)
                         && self.right_caret_offset != Some(offset)
                     {
                         self.right_caret_offset = Some(offset);

@@ -211,18 +211,25 @@ impl App {
                             };
                         let indentation_changed =
                             editable && prepare_code_input(ui, "json_source", &mut self.editor);
+                        let mut readonly;
+                        let buffer: &mut dyn egui::TextBuffer = if editable {
+                            &mut self.editor
+                        } else {
+                            readonly = self.editor.as_str();
+                            &mut readonly
+                        };
                         let mut output = show_code_editor(
                             ui,
                             "json_source",
                             indentation_changed,
                             typography.line_height,
-                            egui::TextEdit::multiline(&mut self.editor)
+                            egui::TextEdit::multiline(buffer)
                                 .id(egui::Id::new("forma_source"))
                                 .font(egui::TextStyle::Monospace)
                                 .code_editor()
                                 .frame(false)
                                 .margin(Vec2::ZERO)
-                                .interactive(editable)
+                                .interactive(!self.busy || self.automatic_job)
                                 .desired_width(ui.available_width())
                                 .desired_rows(1)
                                 .min_size(Vec2::new(0.0, editor_height))
@@ -261,29 +268,9 @@ impl App {
                             self.search.tree.changed();
                             self.search.jump = false;
                         }
-                        let preview_click = if !self.editable {
-                            let response = ui.interact(
-                                output.response.rect.intersect(output.text_clip_rect),
-                                output.response.id.with("preview_caret"),
-                                egui::Sense::click(),
-                            );
-                            if response.hovered() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
-                            }
-                            response
-                                .clicked_by(egui::PointerButton::Primary)
-                                .then(|| ui.input(|input| input.pointer.interact_pos()))
-                                .flatten()
-                        } else {
-                            None
-                        };
-                        let caret = if output.response.has_focus() {
-                            caret_source_offset(&output, &self.editor)
-                        } else {
-                            preview_click.map(|mouse| {
-                                pointer_source_offset(&output, &self.editor, mouse)
-                            })
-                        };
+                        let caret = output.response.has_focus()
+                            .then(|| caret_source_offset(ui, &output, &self.editor))
+                            .flatten();
                         if matches!(self.view, View::Graph | View::Compare)
                             && !output.response.changed()
                             && let Some(offset) = caret
@@ -296,20 +283,6 @@ impl App {
                                 self.source_target = None;
                                 self.pending_reveal = None;
                             }
-                        }
-                        if !self.editable
-                            && let Some(offset) = self.source_caret_offset
-                            && offset >= self.preview_start
-                            && offset <= self.preview_start + self.editor.len()
-                        {
-                            let local = offset - self.preview_start;
-                            let character = self.editor[..local].chars().count();
-                            paint_readonly_caret(
-                                ui,
-                                &output,
-                                character,
-                                typography.line_height,
-                            );
                         }
                         if self.search.jump {
                             if let Some(range) = self.source_target.as_ref().or_else(|| {

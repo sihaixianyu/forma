@@ -1199,3 +1199,79 @@ fn continuous_scroll_in_either_compare_pane_uses_one_pass_and_keeps_rows_aligned
     }
     assert!(app.compare_scroll > 2000.0);
 }
+
+#[test]
+fn first_double_click_selects_word_in_editable_and_readonly_source() {
+    for editable in [true, false] {
+        let mut app = ready_app();
+        let (sender, _receiver) = mpsc::channel();
+        app.jobs = sender.into();
+        app.editor = "{\"name\":\"中文 work example\"}".into();
+        app.full_text = Arc::new(app.editor.clone());
+        app.editable = editable;
+        app.dirty = false;
+        app.view = View::Graph;
+        let original = app.editor.clone();
+        let ctx = egui::Context::default();
+        ui::install_fonts(&ctx);
+        ui::configure(&ctx, false);
+        let frame = |app: &mut App, time, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 800.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| app.workspace(ctx),
+            )
+        };
+        frame(&mut app, 0.0, vec![]);
+        let output = frame(&mut app, 0.1, vec![]);
+        let start = original[..original.find("work").unwrap()].chars().count();
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == original => Some(
+                    text.pos
+                        + text
+                            .galley
+                            .pos_from_cursor(egui::text::CCursor::new(start + 2))
+                            .center()
+                            .to_vec2(),
+                ),
+                _ => None,
+            })
+            .expect("source text must be visible");
+        for (time, pressed) in [(0.2, true), (0.23, false), (0.28, true), (0.31, false)] {
+            frame(
+                &mut app,
+                time,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        let state =
+            egui::text_edit::TextEditState::load(&ctx, egui::Id::new("forma_source")).unwrap();
+        assert_eq!(
+            state.cursor.char_range().unwrap().slice_str(&app.editor),
+            "work",
+            "editable={editable}"
+        );
+        if !editable {
+            frame(&mut app, 0.4, vec![egui::Event::Text("replacement".into())]);
+            assert_eq!(app.editor, original, "preview must remain readonly");
+        }
+    }
+}

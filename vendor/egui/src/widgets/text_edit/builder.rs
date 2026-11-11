@@ -916,10 +916,12 @@ fn events(
 
     // We feed state to the undoer both before and after handling input
     // so that the undoer creates automatic saves even when there are no events for a while.
-    state.undoer.lock().feed_state(
-        ui.input(|i| i.time),
-        &(cursor_range, text.as_str().to_owned()),
-    );
+    if !state.external_undo {
+        state.undoer.lock().feed_state(
+            ui.input(|i| i.time),
+            &(cursor_range, text.as_str().to_owned()),
+        );
+    }
 
     let copy_if_not_password = |ui: &Ui, text: String| {
         if !password {
@@ -1126,10 +1128,12 @@ fn events(
 
     state.cursor.set_char_range(Some(cursor_range));
 
-    state.undoer.lock().feed_state(
-        ui.input(|i| i.time),
-        &(cursor_range, text.as_str().to_owned()),
-    );
+    if !state.external_undo {
+        state.undoer.lock().feed_state(
+            ui.input(|i| i.time),
+            &(cursor_range, text.as_str().to_owned()),
+        );
+    }
 
     (any_change, cursor_range)
 }

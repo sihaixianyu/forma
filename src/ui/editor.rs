@@ -280,6 +280,14 @@ pub(super) fn show_code_editor(
             .iter()
             .any(|event| matches!(event, egui::Event::Paste(_)))
     });
+    if let Some(id) = ui
+        .ctx()
+        .data(|data| data.get_temp::<egui::Id>(editor_id_key(salt)))
+    {
+        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
+        state.external_undo = true;
+        state.store(ui.ctx(), id);
+    }
     let mut output = editor.show(ui);
     if pasting && output.response.has_focus() && output.response.sense.interactive() {
         let root = egui::text::CCursorRange::one(egui::text::CCursor::new(0));
@@ -316,6 +324,8 @@ pub(super) fn show_code_editor(
     );
     // CodeHistory owns replay; release egui's duplicate snapshots.
     output.state.clear_undoer();
+    output.state.external_undo = true;
+    output.state.clone().store(ui.ctx(), output.response.id);
     let restore = editor_id_key(salt).with("restore_focus");
     if output.response.sense.interactive()
         && ui
@@ -398,6 +408,7 @@ pub(super) fn decoded_hover(ui: &egui::Ui, output: &egui::text_edit::TextEditOut
 }
 
 pub(super) fn caret_source_offset(
+    ui: &egui::Ui,
     output: &egui::text_edit::TextEditOutput,
     text: &str,
 ) -> Option<usize> {
@@ -405,43 +416,8 @@ pub(super) fn caret_source_offset(
         .cursor_range
         .or_else(|| output.state.cursor.char_range())?
         .primary;
-    Some(
-        text.char_indices()
-            .nth(cursor.index)
-            .map_or(text.len(), |(offset, _)| offset),
-    )
-}
-
-pub(super) fn pointer_source_offset(
-    output: &egui::text_edit::TextEditOutput,
-    text: &str,
-    mouse: egui::Pos2,
-) -> usize {
-    let cursor = output.galley.cursor_from_pos(mouse - output.galley_pos);
-    text.char_indices()
-        .nth(cursor.index)
-        .map_or(text.len(), |(offset, _)| offset)
-}
-
-pub(super) fn paint_readonly_caret(
-    ui: &egui::Ui,
-    output: &egui::text_edit::TextEditOutput,
-    character: usize,
-    line_height: f32,
-) {
-    let cursor = egui::text::CCursor::new(character);
-    let mut rect = output.galley.pos_from_cursor(cursor);
-    if rect.height() == 0.0 {
-        rect.max.y = rect.min.y + line_height;
-    }
-    let rect = egui::Rect::from_center_size(rect.center(), Vec2::new(0.0, line_height))
-        .translate(output.galley_pos.to_vec2());
-    egui::text_selection::visuals::paint_text_cursor(
-        ui,
-        &ui.painter().with_clip_rect(output.text_clip_rect),
-        rect,
-        0.0,
-    );
+    let rows = code_rows(ui.ctx(), output.response.id, &output.galley);
+    Some(rows.byte_offset(&output.galley, text, cursor))
 }
 
 pub(super) struct EditorViewport<'a> {

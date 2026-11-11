@@ -600,3 +600,112 @@ mod hover_ui_tests {
         );
     }
 }
+
+#[test]
+fn indexed_caret_offsets_match_unicode_text_across_wrapped_rows() {
+    let ctx = egui::Context::default();
+    let text = "{\"value\":\"中文 café 👩‍💻\"}\n".repeat(200);
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let galley = ui.fonts_mut(|fonts| {
+                fonts.layout(text.clone(), FontId::monospace(12.0), Color32::WHITE, 90.0)
+            });
+            let rows = code_rows(ctx, egui::Id::new("offset_test"), &galley);
+            for (index, (byte, _)) in text.char_indices().enumerate() {
+                for prefer_next_row in [false, true] {
+                    assert_eq!(
+                        rows.byte_offset(
+                            &galley,
+                            &text,
+                            egui::text::CCursor {
+                                index,
+                                prefer_next_row,
+                            }
+                        ),
+                        byte
+                    );
+                }
+            }
+            assert_eq!(
+                rows.byte_offset(
+                    &galley,
+                    &text,
+                    egui::text::CCursor::new(text.chars().count())
+                ),
+                text.len()
+            );
+        });
+    });
+}
+
+#[test]
+fn code_editor_skips_duplicate_internal_undo_snapshots() {
+    let ctx = egui::Context::default();
+    let mut text = "{\"value\":\"work\"}".to_owned();
+    let id = egui::Id::new("external_history_test");
+    for frame in 0..4 {
+        let _ = ctx.run(
+            egui::RawInput {
+                time: Some(frame as f64),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    if frame > 0 {
+                        ctx.memory_mut(|memory| memory.request_focus(id));
+                    }
+                    let output = show_code_editor(
+                        ui,
+                        "external_history_test",
+                        false,
+                        18.0,
+                        egui::TextEdit::multiline(&mut text).id(id).code_editor(),
+                    );
+                    assert!(output.state.external_undo);
+                    assert!(!output.state.undoer().has_undo(&(
+                        output.state.cursor.char_range().unwrap_or_default(),
+                        text.clone()
+                    )));
+                });
+            },
+        );
+    }
+}
+
+#[test]
+#[ignore = "manual caret lookup benchmark"]
+fn large_document_caret_lookup_timings() {
+    let text = "{\"name\":\"中文 café work\"}\n".repeat(35_000);
+    let ctx = egui::Context::default();
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let galley = ui.fonts_mut(|fonts| {
+                fonts.layout_no_wrap(text.clone(), FontId::monospace(12.0), Color32::WHITE)
+            });
+            let rows = code_rows(ctx, egui::Id::new("lookup_benchmark"), &galley);
+            let cursor = egui::text::CCursor::new(text.chars().count() * 4 / 5);
+            let expected = text.char_indices().nth(cursor.index).unwrap().0;
+            assert_eq!(rows.byte_offset(&galley, &text, cursor), expected);
+            for indexed in [false, true] {
+                let started = std::time::Instant::now();
+                for _ in 0..100 {
+                    let offset = if indexed {
+                        rows.byte_offset(&galley, std::hint::black_box(&text), cursor)
+                    } else {
+                        std::hint::black_box(&text)
+                            .char_indices()
+                            .nth(cursor.index)
+                            .unwrap()
+                            .0
+                    };
+                    std::hint::black_box(offset);
+                }
+                eprintln!(
+                    "caret lookup indexed={indexed} bytes={} ms/lookup={:.4}",
+                    text.len(),
+                    started.elapsed().as_secs_f64() * 10.0
+                );
+            }
+        });
+    });
+}

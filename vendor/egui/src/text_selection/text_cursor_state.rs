@@ -106,6 +106,47 @@ impl TextCursorState {
 }
 
 fn select_word_at(text: &str, ccursor: CCursor) -> CCursorRange {
+    // Unicode word navigation reverses its input to find the previous boundary.
+    // Keep that work local when selecting a word in a large document. Include
+    // the surrounding separators so segmentation keeps its boundary context.
+    let byte = byte_index_from_char_index(text, ccursor.index);
+    if byte == text.len() && ccursor.index > text.chars().count() {
+        return select_word_at_full_text(text, ccursor);
+    }
+    let is_separator = |c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '{' | '}' | '[' | ']');
+    let start = text[..byte].rfind(is_separator).unwrap_or(0);
+    let end = text[byte..]
+        .find(is_separator)
+        .map_or(text.len(), |offset| byte + offset + 1);
+    let local = &text[start..end];
+    let local_index = text[start..byte].chars().count();
+    let offset = ccursor.index - local_index;
+    let range = select_word_at_full_text(
+        local,
+        CCursor {
+            index: local_index,
+            ..ccursor
+        },
+    );
+    let [min, max] = range.sorted_cursors();
+    // Whitespace selection can cross separators. Preserve the original behavior
+    // whenever the local result could depend on text outside this window.
+    if (start > 0 && min.index == 0) || (end < text.len() && max.index == local.chars().count()) {
+        return select_word_at_full_text(text, ccursor);
+    }
+    CCursorRange::two(
+        CCursor {
+            index: range.secondary.index + offset,
+            ..range.secondary
+        },
+        CCursor {
+            index: range.primary.index + offset,
+            ..range.primary
+        },
+    )
+}
+
+fn select_word_at_full_text(text: &str, ccursor: CCursor) -> CCursorRange {
     if ccursor.index == 0 {
         CCursorRange::two(ccursor, ccursor_next_word(text, ccursor))
     } else {
@@ -372,6 +413,81 @@ mod test {
 #[cfg(test)]
 mod forma_word_boundary_tests {
     use super::*;
+
+    #[test]
+    fn large_json_selection_keeps_global_unicode_offsets() {
+        for separator in [",\n", ","] {
+            let row = "{\"name\":\"中文 café work\",\"active\":true}";
+            let mut text = vec![row; 25_000].join(separator);
+            text.push_str(",\"last\":\"selected\"");
+            let start = text[..text.rfind("selected").unwrap()].chars().count();
+            let range = select_word_at(&text, CCursor::new(start + 3));
+            assert_eq!(range.as_sorted_char_range(), start..start + 8);
+            assert_eq!(range.slice_str(&text), "selected");
+        }
+    }
+
+    #[test]
+    fn local_selection_preserves_word_and_whitespace_ranges() {
+        let cases = [
+            "",
+            "work",
+            "  work  next \n\n last\t",
+            "{\"work\":\"hello_world\",\"url\":\"www.example.com\"}",
+            "[123,456,1.23,\"can't\",\"a:b\"]\r\nwork",
+            "前缀 {\"中文\": \"café ❤️👍 👩‍💻\"} 后缀",
+            "א\"ב [אב] ภาษาไทย 中文 e\u{301} \u{301}work",
+            "🇨🇳🇬🇧 {a\u{301}} [\u{301}b] \r\n\tend",
+        ];
+        for text in cases {
+            for index in 0..=text.chars().count() + 1 {
+                let cursor = CCursor::new(index);
+                assert_eq!(
+                    select_word_at(text, cursor),
+                    select_word_at_full_text(text, cursor),
+                    "selection at {index} in {text:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "manual large-document selection benchmark"]
+    fn large_document_word_selection_timings() {
+        use std::{hint::black_box, time::Instant};
+        for separator in [",\n", ","] {
+            let row = "{\"name\":\"中文 work example\",\"active\":true}";
+            let text = vec![row; 25_000].join(separator);
+            for fraction in [0, 2, 4] {
+                let from = byte_index_from_char_index(&text, text.chars().count() * fraction / 5);
+                let byte = text[from..].find("work").unwrap() + from;
+                let index = text[..byte].chars().count() + 2;
+                let cursor = CCursor::new(index);
+                assert_eq!(
+                    select_word_at(&text, cursor),
+                    select_word_at_full_text(&text, cursor)
+                );
+                for (label, select) in [
+                    (
+                        "before",
+                        select_word_at_full_text as fn(&str, CCursor) -> CCursorRange,
+                    ),
+                    ("after", select_word_at),
+                ] {
+                    let start = Instant::now();
+                    for _ in 0..10 {
+                        black_box(select(black_box(&text), cursor));
+                    }
+                    eprintln!(
+                        "{label} bytes={} position={fraction}/5 pretty={} ms={:.3}",
+                        text.len(),
+                        separator.contains('\n'),
+                        start.elapsed().as_secs_f64() * 100.0
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn incremental_offsets_preserve_unicode_word_boundaries() {

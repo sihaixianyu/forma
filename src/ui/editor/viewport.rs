@@ -9,6 +9,22 @@ pub(super) struct CodeRows {
 }
 
 impl CodeRows {
+    pub(super) fn byte_offset(
+        &self,
+        galley: &egui::Galley,
+        text: &str,
+        cursor: egui::text::CCursor,
+    ) -> usize {
+        let row = self.row_for_cursor(galley, cursor);
+        let start = self.bytes[row];
+        let column = cursor.index.saturating_sub(self.chars[row]);
+        start
+            + text[start..]
+                .char_indices()
+                .nth(column)
+                .map_or(text.len() - start, |(offset, _)| offset)
+    }
+
     pub(super) fn row_for_cursor(
         &self,
         galley: &egui::Galley,
