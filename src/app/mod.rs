@@ -165,7 +165,12 @@ impl eframe::App for App {
                 crate::browser::session::save(left, right, self.view == View::Compare);
                 self.saved_inputs = Some(key);
             }
-            if let Some(error) = crate::browser::session::error() {
+            // Let startup parse/compare feedback finish before showing restore failures.
+            if !self.busy
+                && self.auto_due.is_none()
+                && self.compare_due.is_none()
+                && let Some(error) = crate::browser::session::error()
+            {
                 self.notify(feedback::Kind::Error, error);
             }
         }

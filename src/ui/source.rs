@@ -7,6 +7,23 @@ impl App {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.spacing_mut().interact_size = Vec2::new(0.0, 24.0);
             ui.spacing_mut().button_padding = Vec2::new(8.0, 0.0);
+            if segmented_button(
+                ui,
+                if compact {
+                    "\u{f0c1}"
+                } else {
+                    "\u{f0c1}  Share"
+                },
+                p,
+                false,
+                Vec2::new(if compact { 28.0 } else { 0.0 }, 24.0),
+            )
+            .on_hover_text("Share a snapshot of the current JSON and view")
+            .clicked()
+            {
+                self.open_share(ui.ctx());
+            }
+            segment_divider(ui, p, 16.0);
             let format = if compact {
                 "\u{f036}"
             } else {

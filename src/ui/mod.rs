@@ -10,6 +10,7 @@ pub(crate) mod decode_ui;
 mod editor;
 pub(crate) mod feedback;
 mod search;
+mod share;
 mod source;
 pub(crate) mod style;
 mod workspace;

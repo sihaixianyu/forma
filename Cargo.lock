@@ -1048,6 +1048,7 @@ dependencies = [
  "base64",
  "csv",
  "eframe",
+ "flate2",
  "getrandom 0.3.4",
  "js-sys",
  "log",

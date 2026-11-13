@@ -206,6 +206,7 @@ impl App {
             }
             self.only_differences = enabled;
         }
+        self.share_window(ctx);
         if format_requested {
             if self.active_right && self.view == View::Compare {
                 preserve_editor_undo(ctx, "compare_editor", &self.compare_text);

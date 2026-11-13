@@ -3,6 +3,11 @@ let restored = null;
 let error = null;
 
 export async function loadSession() {
+    // Pasting another share URL into this tab can be a fragment-only navigation.
+    // replaceState used by Share does not emit hashchange, so it keeps the editor intact.
+    window.addEventListener('hashchange', () => {
+        if (window.location.hash.startsWith('#share=')) window.location.reload();
+    });
     try {
         database = await new Promise((resolve, reject) => {
             const request = indexedDB.open('forma-session', 1);
@@ -21,6 +26,8 @@ export async function loadSession() {
 }
 
 export function restoredSession() { return restored; }
+
+export function reportSessionError(message) { error = message; }
 
 export function saveSession(left, right, compare) {
     if (!database) return;
