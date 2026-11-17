@@ -64,6 +64,67 @@ impl TextCursorState {
         is_being_dragged: bool,
     ) -> bool {
         let text = galley.text();
+        let click_id = response.id.with("text_last_click");
+        let pressed_id = response.id.with("text_multi_press");
+        let options = ui.ctx().options(|options| options.input_options);
+        let (time, pos, pressed, released, down, shift) = ui.input(|input| {
+            (
+                input.time,
+                input.pointer.interact_pos(),
+                input.pointer.button_pressed(crate::PointerButton::Primary),
+                input.pointer.button_released(crate::PointerButton::Primary),
+                input.pointer.primary_down(),
+                input.modifiers.shift,
+            )
+        });
+        if response.clicked()
+            && let Some(pos) = pos
+        {
+            let count = if response.triple_clicked() {
+                3_u8
+            } else if response.double_clicked() {
+                2
+            } else {
+                1
+            };
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(click_id, (time, pos, count)));
+        }
+        // Text selection should respond on the second press, not wait for release.
+        // Track clicks per widget so a click in another pane cannot start a word selection.
+        if response.hovered()
+            && pressed
+            && !shift
+            && let Some(pos) = pos
+            && let Some((last_time, last_pos, count)) = ui
+                .ctx()
+                .data(|data| data.get_temp::<(f64, crate::Pos2, u8)>(click_id))
+            && time > last_time
+            && time - last_time < options.max_double_click_delay
+            && pos.distance(last_pos) <= options.max_click_dist
+        {
+            let range = if count >= 2 {
+                select_line_at(text, cursor_at_pointer)
+            } else {
+                select_word_at(text, cursor_at_pointer)
+            };
+            self.set_char_range(Some(range));
+            ui.ctx().data_mut(|data| data.insert_temp(pressed_id, pos));
+            return true;
+        }
+        if let Some(origin) = ui
+            .ctx()
+            .data(|data| data.get_temp::<crate::Pos2>(pressed_id))
+        {
+            let stationary = pos.is_some_and(|pos| pos.distance(origin) <= options.max_click_dist);
+            if released || !down || !stationary {
+                ui.ctx()
+                    .data_mut(|data| data.remove::<crate::Pos2>(pressed_id));
+            }
+            if stationary && (down || released) {
+                return true; // Holding the second press must not collapse the selected word.
+            }
+        }
 
         if response.double_clicked() {
             // Select word:

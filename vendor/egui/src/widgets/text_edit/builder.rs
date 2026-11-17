@@ -19,6 +19,50 @@ use crate::{
 
 use super::{TextEditOutput, TextEditState};
 
+#[derive(Clone)]
+struct SelectionGalley {
+    base: std::sync::Weak<Galley>,
+    range: CCursorRange,
+    background: Color32,
+    foreground: Color32,
+    painted: Arc<Galley>,
+}
+
+fn paint_cached_selection(ui: &Ui, id: Id, galley: &mut Arc<Galley>, range: CCursorRange) {
+    let id = id.with("painted_text_selection");
+    if range.is_empty() {
+        ui.ctx().data_mut(|data| data.remove::<SelectionGalley>(id));
+        return;
+    }
+    let selection = ui.visuals().selection;
+    if let Some(cached) = ui.ctx().data(|data| data.get_temp::<SelectionGalley>(id))
+        && cached.range == range
+        && cached.background == selection.bg_fill
+        && cached.foreground == selection.stroke.color
+        && cached
+            .base
+            .upgrade()
+            .is_some_and(|base| Arc::ptr_eq(&base, galley))
+    {
+        *galley = cached.painted;
+        return;
+    }
+    let base = Arc::downgrade(galley);
+    paint_text_selection(galley, ui.visuals(), &range, None);
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            id,
+            SelectionGalley {
+                base,
+                range,
+                background: selection.bg_fill,
+                foreground: selection.stroke.color,
+                painted: galley.clone(),
+            },
+        )
+    });
+}
+
 type LayouterFn<'t> = &'t mut dyn FnMut(&Ui, &dyn TextBuffer, f32) -> Arc<Galley>;
 
 /// A text region that the user can edit the contents of.
@@ -718,7 +762,7 @@ impl TextEdit<'_> {
 
             if has_focus && let Some(cursor_range) = state.cursor.range(&galley) {
                 // Add text selection rectangles to the galley:
-                paint_text_selection(&mut galley, ui.visuals(), &cursor_range, None);
+                paint_cached_selection(ui, id, &mut galley, cursor_range);
             }
 
             if !clip_text {
@@ -762,7 +806,10 @@ impl TextEdit<'_> {
                 let primary_cursor_rect = cursor_rect(&galley, &cursor_range.primary, row_height)
                     .translate(galley_pos.to_vec2());
 
-                if response.changed() || selection_changed {
+                let [start, end] = cursor_range.sorted_cursors();
+                let selects_all = start.index == 0 && end.index == galley.end().index;
+                if response.changed() || (selection_changed && !selects_all) {
+                    // Keep the viewport when selecting/copying the entire document.
                     // Scroll to keep primary cursor in view:
                     ui.scroll_to_rect(primary_cursor_rect + margin, None);
                 }

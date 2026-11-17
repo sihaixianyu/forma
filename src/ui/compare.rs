@@ -131,7 +131,11 @@ impl App {
                         let both_invalid =
                             self.syntax_error.is_some() && self.right_syntax_error.is_some();
                         let has_syntax_error = syntax.is_some();
-                        let message = if both_invalid {
+                        let message = if self.busy && self.automatic_job {
+                            "Updating comparison…".into()
+                        } else if self.compare_due.is_some() {
+                            "Comparison pending…".into()
+                        } else if both_invalid {
                             "Both inputs: Invalid JSON".into()
                         } else if let Some((side, error)) = syntax {
                             format!("{side}: {}", error.summary())

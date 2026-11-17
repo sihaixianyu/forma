@@ -1,3 +1,4 @@
+use super::inputs::{INPUTS, InputRef};
 use crate::app::jobs::{Completed, Job, Output, Work, execute};
 use forma::{Document, Format, graph::Graph};
 use serde::{Deserialize, Serialize};
@@ -84,9 +85,9 @@ enum RemoteJob {
     Inspect(DocRef, String),
     Edit(DocRef, String, String, bool),
     Import(Arc<String>, String),
-    Compare(Arc<String>, Arc<String>),
-    CompareOriginal(Arc<String>, Arc<String>),
-    CompareWithOptions(Arc<String>, Arc<String>, forma::review::Options),
+    Compare(InputRef, InputRef),
+    CompareOriginal(InputRef, InputRef),
+    CompareWithOptions(InputRef, InputRef, forma::review::Options),
     FormatRight(Arc<String>),
     SortBoth(Arc<String>, Arc<String>, Format),
     LocateDiff(Arc<String>, Arc<String>, forma::Difference),
@@ -114,11 +115,19 @@ impl RemoteJob {
                 *rename,
             ),
             Job::Import(text, name) => Self::Import(text.clone(), name.clone()),
-            Job::Compare(left, right) => Self::Compare(left.clone(), right.clone()),
-            Job::CompareOriginal(left, right) => Self::CompareOriginal(left.clone(), right.clone()),
-            Job::CompareWithOptions(left, right, options) => {
-                Self::CompareWithOptions(left.clone(), right.clone(), options.clone())
-            }
+            Job::Compare(left, right) => Self::Compare(
+                InputRef::new(0, left, force),
+                InputRef::new(1, right, force),
+            ),
+            Job::CompareOriginal(left, right) => Self::CompareOriginal(
+                InputRef::new(0, left, force),
+                InputRef::new(1, right, force),
+            ),
+            Job::CompareWithOptions(left, right, options) => Self::CompareWithOptions(
+                InputRef::new(0, left, force),
+                InputRef::new(1, right, force),
+                options.clone(),
+            ),
             Job::FormatRight(text) => Self::FormatRight(text.clone()),
             Job::SortBoth(left, right, format) => {
                 Self::SortBoth(left.clone(), right.clone(), *format)
@@ -145,10 +154,12 @@ impl RemoteJob {
                 Job::Edit(doc.resolve()?.0, pointer, replacement, rename)
             }
             Self::Import(text, name) => Job::Import(text, name),
-            Self::Compare(left, right) => Job::Compare(left, right),
-            Self::CompareOriginal(left, right) => Job::CompareOriginal(left, right),
+            Self::Compare(left, right) => Job::Compare(left.resolve(0)?, right.resolve(1)?),
+            Self::CompareOriginal(left, right) => {
+                Job::CompareOriginal(left.resolve(0)?, right.resolve(1)?)
+            }
             Self::CompareWithOptions(left, right, options) => {
-                Job::CompareWithOptions(left, right, options)
+                Job::CompareWithOptions(left.resolve(0)?, right.resolve(1)?, options)
             }
             Self::FormatRight(text) => Job::FormatRight(text),
             Self::SortBoth(left, right, format) => Job::SortBoth(left, right, format),
@@ -196,6 +207,7 @@ enum Reply {
 }
 #[derive(Serialize, Deserialize)]
 struct Response {
+    inputs: Option<[u64; 2]>,
     result: Result<Reply, String>,
     elapsed_ms: f64,
     target: Option<String>,
@@ -217,6 +229,17 @@ fn source(job: &Job) -> Option<Arc<String>> {
 fn process_request(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let request: Request = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
     let job = request.job.into_job()?;
+    let inputs = if matches!(
+        &job,
+        Job::Compare(..) | Job::CompareOriginal(..) | Job::CompareWithOptions(..)
+    ) {
+        INPUTS.with(|inputs| {
+            let inputs = inputs.borrow();
+            Some([inputs[0].as_ref().unwrap().0, inputs[1].as_ref().unwrap().0])
+        })
+    } else {
+        None
+    };
     let original = source(&job);
     let original_graph = match &job {
         Job::Transform(_, _, graph) => Some(graph.clone()),
@@ -296,6 +319,7 @@ fn process_request(bytes: &[u8]) -> Result<Vec<u8>, String> {
         Output::Editing(dialog) => Reply::Editing(dialog),
     });
     let response = Response {
+        inputs,
         result,
         elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
         target,
@@ -320,6 +344,15 @@ impl crate::worker::Task<Completed> for Work {
             Ok(response) => response,
             Err(error) => return self.failed(error),
         };
+        if let Some(ids) = response.inputs
+            && let Job::Compare(left, right)
+            | Job::CompareOriginal(left, right)
+            | Job::CompareWithOptions(left, right, _) = &self.job
+        {
+            INPUTS.with(|inputs| {
+                *inputs.borrow_mut() = [Some((ids[0], left.clone())), Some((ids[1], right.clone()))]
+            });
+        }
         let result = response.result.and_then(|reply| {
             Ok(match reply {
                 Reply::Document {

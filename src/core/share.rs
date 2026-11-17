@@ -17,11 +17,15 @@ pub struct Snapshot {
 
 pub fn link(base: &str, snapshot: &Snapshot) -> Result<String, String> {
     if snapshot.left.len().saturating_add(snapshot.right.len()) > MAX_SNAPSHOT_BYTES {
-        return Err("Content is too large for a share link. Export JSON instead.".into());
+        return Err(
+            "Content is too large for a share link. Reduce the JSON content and try again.".into(),
+        );
     }
     let bytes = serde_json::to_vec(snapshot).map_err(|e| e.to_string())?;
     if bytes.len() > MAX_SNAPSHOT_BYTES {
-        return Err("Content is too large for a share link. Export JSON instead.".into());
+        return Err(
+            "Content is too large for a share link. Reduce the JSON content and try again.".into(),
+        );
     }
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(&bytes).map_err(|e| e.to_string())?;
@@ -32,7 +36,9 @@ pub fn link(base: &str, snapshot: &Snapshot) -> Result<String, String> {
         URL_SAFE_NO_PAD.encode(compressed)
     );
     if link.len() > MAX_LINK_LENGTH {
-        return Err("Share link exceeds 16,000 characters. Export JSON instead.".into());
+        return Err(
+            "Share link exceeds 16,000 characters. Reduce the JSON content and try again.".into(),
+        );
     }
     Ok(link)
 }

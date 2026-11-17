@@ -138,13 +138,35 @@ pub(crate) fn document_output(doc: Document) -> Output {
     Output::Document(doc, graph)
 }
 
+type ParsedInput = (Arc<String>, Result<Arc<serde_json::Value>, String>);
+thread_local! {
+    static REVIEW_INPUTS: std::cell::RefCell<[Option<ParsedInput>; 2]> = const {
+        std::cell::RefCell::new([None, None])
+    };
+}
+
+fn review_input(side: usize, text: &Arc<String>) -> Result<Arc<serde_json::Value>, String> {
+    REVIEW_INPUTS.with(|inputs| {
+        let mut inputs = inputs.borrow_mut();
+        if let Some((source, parsed)) = &inputs[side]
+            && (Arc::ptr_eq(source, text) || source == text)
+        {
+            return parsed.clone();
+        }
+        let _stage = forma::diagnostics::Stage::new("compare_parse", text.len());
+        let parsed = forma::parse_json(text).map(Arc::new);
+        inputs[side] = Some((text.clone(), parsed.clone()));
+        parsed
+    })
+}
+
 fn execute_review(
     left: Arc<String>,
     right: Arc<String>,
     options: &forma::review::Options,
     normalize: bool,
 ) -> Result<Output, String> {
-    let (a, b) = match (forma::parse_json(&left), forma::parse_json(&right)) {
+    let (a, b) = match (review_input(0, &left), review_input(1, &right)) {
         (Ok(a), Ok(b)) => (a, b),
         (a, b) => {
             return Ok(Output::InvalidComparison(
@@ -153,7 +175,7 @@ fn execute_review(
             ));
         }
     };
-    let report = forma::review::build(left, right, &a, b, options, normalize, 1000)?;
+    let report = forma::review::build(left, right, &a, (*b).clone(), options, normalize, 1000)?;
     let first = report.differences.first();
     let ranges = first
         .map(|d| (d.left_range.clone(), d.right_range.clone()))
@@ -336,6 +358,25 @@ impl SyntaxError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comparison_reuses_unchanged_inputs_without_mutating_original_trees() {
+        REVIEW_INPUTS.with(|inputs| *inputs.borrow_mut() = [None, None]);
+        let left = Arc::new("{\"a\":1,\"b\":2}".into());
+        let right = Arc::new("{\"b\":2,\"a\":1}".into());
+        let a = review_input(0, &left).unwrap();
+        let b = review_input(1, &right).unwrap();
+        execute_review(left.clone(), right.clone(), &Default::default(), true).unwrap();
+        assert!(Arc::ptr_eq(&a, &review_input(0, &left).unwrap()));
+        assert!(Arc::ptr_eq(&b, &review_input(1, &right).unwrap()));
+        assert_eq!(serde_json::to_string(&*b).unwrap(), *right);
+        let changed = Arc::new("{\"b\":3}".into());
+        assert!(!Arc::ptr_eq(&b, &review_input(1, &changed).unwrap()));
+        assert!(Arc::ptr_eq(&a, &review_input(0, &left).unwrap()));
+        let invalid = Arc::new("{".into());
+        assert_eq!(review_input(1, &invalid), review_input(1, &invalid));
+        assert!(review_input(1, &right).is_ok());
+    }
 
     #[test]
     fn parser_byte_columns_map_to_unicode_cursors_and_eof() {

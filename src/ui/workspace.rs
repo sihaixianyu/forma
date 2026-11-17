@@ -518,6 +518,12 @@ impl App {
     }
 
     pub(super) fn json_status(&self, right_input: bool, p: Palette) -> (&'static str, Color32) {
+        if self.view == View::Compare && self.busy && self.automatic_job {
+            return ("Updating comparison", p.amber);
+        }
+        if self.view == View::Compare && self.compare_due.is_some() {
+            return ("Comparison pending", p.muted);
+        }
         if right_input {
             if self.right_syntax_error.is_some() {
                 ("Invalid JSON", p.red)

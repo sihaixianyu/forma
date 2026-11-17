@@ -283,3 +283,164 @@ fn giant_single_line_keeps_wrapped_rows_bounded_and_preserves_unicode_cursor_off
         });
     });
 }
+
+#[test]
+fn incremental_layout_matches_full_layout_after_edits_and_style_changes() {
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let mut cache = CodeCache::default();
+    let padding = "  \"padding\": 123,\n".repeat(1100);
+    let inputs = [
+        format!("{{\n{padding}\"中文🙂\": \"escaped \\\" quote\"\n}}"),
+        format!("{{\n{padding}\"中文🙂\"\n : \"changed\",\n\"last\": true\n}}\n"),
+        format!("{{\n{padding}\"unfinished\n string\\\"\n still open"),
+        format!("{{\n{padding}\"closed\n string\": 5\n}}"),
+        format!("{{\n\"inserted\": [],\n{padding}\"last\": null\n}}"),
+    ];
+    for (iteration, text) in inputs.iter().chain(inputs.iter().rev()).enumerate() {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let dark = iteration >= 5 && iteration % 2 == 0;
+                let width = if iteration >= 5 && iteration % 3 == 0 {
+                    210.0
+                } else {
+                    370.0
+                };
+                let actual = cache.layout_width(ui, text, dark, "", width);
+                let expected = CodeCache::default().layout_leaf(
+                    ui,
+                    text,
+                    dark,
+                    width,
+                    EditorTypography::default(),
+                );
+                assert_eq!(actual.rows.len(), expected.rows.len());
+                assert_eq!(actual.size(), expected.size());
+                for (a, b) in actual.rows.iter().zip(&expected.rows) {
+                    assert_eq!(a.pos, b.pos);
+                    assert_eq!(a.ends_with_newline, b.ends_with_newline);
+                    assert_eq!(
+                        a.glyphs.iter().map(|g| g.chr).collect::<String>(),
+                        b.glyphs.iter().map(|g| g.chr).collect::<String>()
+                    );
+                }
+                for at in text.char_indices().map(|(at, _)| at) {
+                    let color = |job: &egui::text::LayoutJob| {
+                        job.sections
+                            .iter()
+                            .find(|s| s.byte_range.contains(&at))
+                            .map(|s| s.format.color)
+                    };
+                    // Newline colors are not rendered; adjacent blocks may merge them differently.
+                    if text.as_bytes()[at] != b'\n' {
+                        assert_eq!(color(&actual.job), color(&expected.job), "byte {at}");
+                    }
+                }
+            });
+        });
+    }
+}
+
+#[test]
+#[ignore = "explicit CPU layout benchmark"]
+fn incremental_layout_benchmark() {
+    use std::time::Instant;
+    let bytes = std::env::var("FORMA_BENCH_BYTES")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1_048_576);
+    for pretty in [true, false] {
+        let row = if pretty {
+            "  {\"id\":12345,\"name\":\"中文🙂 example\"},\n"
+        } else {
+            "{\"id\":12345,\"name\":\"中文🙂 example\"},"
+        };
+        let mut text = format!(
+            "[\n{}null\n]",
+            (0..bytes / row.len())
+                .map(|i| row.replace("example", &format!("example {i}")))
+                .collect::<String>()
+        );
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let mut full = CodeCache::default();
+        let mut incremental = CodeCache::default();
+        let mut timings = [Vec::new(), Vec::new()];
+        for i in 0..21 {
+            let at = text.find("1234").unwrap();
+            text.replace_range(at..at + 5, if i % 2 == 0 { "12345" } else { "12346" });
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    for which in if i % 2 == 0 { [0, 1] } else { [1, 0] } {
+                        let start = Instant::now();
+                        let galley = if which == 0 {
+                            full.layout_leaf(ui, &text, false, 520.0, EditorTypography::default())
+                        } else {
+                            incremental.layout_width(ui, &text, false, "", 520.0)
+                        };
+                        std::hint::black_box(galley);
+                        if i > 0 {
+                            timings[which].push(start.elapsed().as_secs_f64() * 1000.0);
+                        }
+                    }
+                });
+            });
+        }
+        for (which, samples) in timings.iter_mut().enumerate() {
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "layout bytes={} pretty={pretty} incremental={} p50_ms={:.3} p95_ms={:.3}",
+                text.len(),
+                which == 1,
+                samples[10],
+                samples[18]
+            );
+        }
+    }
+}
+
+#[test]
+fn unchanged_selection_reuses_painted_galley_and_invalidates_on_theme_or_range() {
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    let id = egui::Id::new("selection_cache_regression");
+    let mut cache = CodeCache::default();
+    let mut text = "{\"name\":\"中文 work example\"}\n".repeat(1000);
+    let mut last: Option<Arc<egui::Galley>> = None;
+    for frame in 0..6 {
+        if frame == 5 {
+            text.push_str("{}");
+        }
+        let dark = frame >= 3;
+        configure(&ctx, dark);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ctx.memory_mut(|memory| memory.request_focus(id));
+                let mut state = egui::text_edit::TextEditState::load(ctx, id).unwrap_or_default();
+                state.external_undo = true;
+                state
+                    .cursor
+                    .set_char_range(Some(egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(2),
+                        egui::text::CCursor::new(if frame >= 4 { 5 } else { 6 }),
+                    )));
+                state.store(ctx, id);
+                let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, width| {
+                    cache.layout_width(ui, buffer.as_str(), dark, "", width)
+                };
+                let output = egui::TextEdit::multiline(&mut text)
+                    .id(id)
+                    .layouter(&mut layouter)
+                    .show(ui);
+                if let Some(previous) = &last {
+                    if frame == 2 {
+                        assert!(Arc::ptr_eq(previous, &output.galley));
+                    } else if frame >= 3 {
+                        assert!(!Arc::ptr_eq(previous, &output.galley));
+                    }
+                }
+                last = Some(output.galley);
+            });
+        });
+    }
+}

@@ -54,81 +54,153 @@ impl App {
     }
 
     pub(super) fn share_window(&mut self, ctx: &egui::Context) {
-        if let Some(result) = ctx.data_mut(|data| {
-            let id = egui::Id::new("share_export_result");
-            let result = data.get_temp::<Result<(), String>>(id);
-            data.remove::<Result<(), String>>(id);
-            result
-        }) {
-            match result {
-                Ok(()) => self.notify(feedback::Kind::Success, "JSON exported"),
-                Err(error) => self.notify(feedback::Kind::Error, error),
-            }
-        }
         let id = egui::Id::new("share_dialog");
         let Some(dialog) = ctx.data(|data| data.get_temp::<ShareDialog>(id)) else {
             return;
         };
         let mut close = false;
-        let response = egui::Modal::new(id).show(ctx, |ui| {
-            ui.set_width(440.0);
-            ui.heading("Share JSON");
-            ui.label(if dialog.snapshot.compare { "Snapshot includes both JSON inputs and Compare mode." } else { "Snapshot includes the current JSON and Graph mode." });
-            ui.label("Anyone with this link can read the content. Links are not encrypted and cannot be revoked.");
-            ui.add_space(8.0);
-            match &dialog.link {
-                Ok(link) => {
-                    let mut text = link.as_str();
-                    ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY));
-                    ui.label(format!("{} characters · some messaging apps may truncate long links", link.len()));
-                    if ui.button("Copy link").clicked() {
-                        ctx.copy_text(link.clone());
-                        self.notify(feedback::Kind::Success, "Share link copied");
+        let p = palette(self.dark);
+        let width = (ctx.content_rect().width() - 64.0).clamp(240.0, 460.0);
+        let response = egui::Modal::new(id)
+            .frame(
+                egui::Frame::new()
+                    .fill(p.canvas)
+                    .stroke(Stroke::new(1.0_f32, p.border))
+                    .corner_radius(16)
+                    .inner_margin(24),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(width);
+                ui.spacing_mut().item_spacing.y = 12.0;
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Share JSON")
+                            .size(22.0)
+                            .strong()
+                            .color(p.text),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (rect, response) =
+                            ui.allocate_exact_size(Vec2::splat(28.0), egui::Sense::click());
+                        let response = response
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("Close");
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close")
+                        });
+                        if response.hovered() {
+                            ui.painter().rect_filled(rect, 6, p.tint);
+                        }
+                        let center = rect.center();
+                        for direction in [-1.0, 1.0] {
+                            let offset = Vec2::new(4.0, 4.0 * direction);
+                            ui.painter().line_segment(
+                                [center - offset, center + offset],
+                                Stroke::new(1.5_f32, p.muted),
+                            );
+                        }
+                        close = response.clicked();
+                    });
+                });
+                ui.horizontal(|ui| {
+                    badge(
+                        ui,
+                        if dialog.snapshot.compare {
+                            "Compare"
+                        } else {
+                            "Graph"
+                        },
+                        p.accent,
+                        p.accent.gamma_multiply(0.12),
+                    );
+                    ui.label(
+                        RichText::new(if dialog.snapshot.compare {
+                            "Both JSON inputs included"
+                        } else {
+                            "Current JSON included"
+                        })
+                        .size(12.0)
+                        .color(p.muted),
+                    );
+                });
+                ui.add_space(2.0);
+                match &dialog.link {
+                    Ok(link) => {
+                        egui::Frame::new()
+                            .fill(p.subtle)
+                            .stroke(Stroke::new(1.0_f32, p.border))
+                            .corner_radius(10)
+                            .inner_margin(14)
+                            .show(ui, |ui| {
+                                ui.set_width((width - 30.0).max(0.0));
+                                ui.label(
+                                    RichText::new("Snapshot link")
+                                        .size(12.0)
+                                        .strong()
+                                        .color(p.muted),
+                                );
+                                let mut text = link.as_str();
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut text)
+                                        .font(FontId::monospace(12.0))
+                                        .text_color(p.text)
+                                        .frame(false)
+                                        .desired_width(f32::INFINITY),
+                                );
+                                ui.label(
+                                    RichText::new(format!("{} characters", link.len()))
+                                        .size(11.0)
+                                        .color(p.muted),
+                                );
+                            });
+                        ui.label(
+                            RichText::new("Opens a fixed snapshot. Later edits stay here.")
+                                .size(12.0)
+                                .color(p.muted),
+                        );
+                        if action_button(ui, "Copy link", p, true, Vec2::new(width, 38.0)).clicked()
+                        {
+                            ctx.copy_text(link.clone());
+                            self.notify(feedback::Kind::Success, "Share link copied");
+                        }
+                        if link.len() > 2_000 {
+                            ui.label(
+                                RichText::new("Some messaging apps may truncate long links.")
+                                    .size(11.0)
+                                    .color(p.amber),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        egui::Frame::new()
+                            .fill(p.red.gamma_multiply(0.08))
+                            .corner_radius(10)
+                            .inner_margin(14)
+                            .show(ui, |ui| {
+                                ui.set_width((width - 28.0).max(0.0));
+                                ui.label(
+                                    RichText::new("Unable to create link").strong().color(p.red),
+                                );
+                                ui.label(RichText::new(error).size(12.0).color(p.text));
+                            });
                     }
                 }
-                Err(error) => { ui.colored_label(palette(self.dark).red, error); }
-            }
-            ui.horizontal(|ui| {
-                if ui.button(if dialog.snapshot.compare { "Export left JSON" } else { "Export JSON" }).clicked() {
-                    export(ctx, "document.json", dialog.snapshot.left.clone());
-                }
-                if dialog.snapshot.compare && ui.button("Export right JSON").clicked() {
-                    export(ctx, "comparison.json", dialog.snapshot.right.clone());
-                }
-                close = ui.button("Close").clicked();
+                ui.add_space(2.0);
+                ui.separator();
+                ui.label(
+                    RichText::new("Anyone with the link can read this snapshot.")
+                        .size(12.0)
+                        .color(p.muted),
+                );
+                ui.label(
+                    RichText::new("Links are not encrypted and cannot be revoked.")
+                        .size(11.0)
+                        .color(p.muted),
+                );
             });
-        });
         if close || (ctx.cumulative_frame_nr() > dialog.opened_frame && response.should_close()) {
             ctx.data_mut(|data| data.remove::<ShareDialog>(id));
         }
-    }
-}
-
-fn export(ctx: &egui::Context, name: &str, text: String) {
-    let ctx = ctx.clone();
-    #[cfg(target_arch = "wasm32")]
-    {
-        let name = name.to_owned();
-        wasm_bindgen_futures::spawn_local(async move {
-            if let Some(file) = rfd::AsyncFileDialog::new()
-                .set_file_name(name)
-                .save_file()
-                .await
-            {
-                let result = file
-                    .write(text.as_bytes())
-                    .await
-                    .map_err(|error| format!("Could not export JSON: {error}"));
-                ctx.data_mut(|data| data.insert_temp(egui::Id::new("share_export_result"), result));
-                ctx.request_repaint();
-            }
-        });
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(path) = rfd::FileDialog::new().set_file_name(name).save_file() {
-        let result =
-            std::fs::write(path, text).map_err(|error| format!("Could not export JSON: {error}"));
-        ctx.data_mut(|data| data.insert_temp(egui::Id::new("share_export_result"), result));
     }
 }
 

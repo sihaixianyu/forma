@@ -1202,11 +1202,14 @@ fn continuous_scroll_in_either_compare_pane_uses_one_pass_and_keeps_rows_aligned
 
 #[test]
 fn first_double_click_selects_word_in_editable_and_readonly_source() {
-    for editable in [true, false] {
+    for (editable, rows) in [(true, 0), (false, 0), (true, 20_000), (false, 20_000)] {
         let mut app = ready_app();
         let (sender, _receiver) = mpsc::channel();
         app.jobs = sender.into();
-        app.editor = "{\"name\":\"中文 work example\"}".into();
+        app.editor = format!(
+            "{{\"name\":\"中文 work example\",\"data\":[\n{}0]}}",
+            "12345,\n".repeat(rows)
+        );
         app.full_text = Arc::new(app.editor.clone());
         app.editable = editable;
         app.dirty = false;
@@ -1236,7 +1239,7 @@ fn first_double_click_selects_word_in_editable_and_readonly_source() {
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.job.text == original => Some(
+                egui::Shape::Text(text) if text.galley.job.text == app.editor => Some(
                     text.pos
                         + text
                             .galley
@@ -1261,6 +1264,36 @@ fn first_double_click_selects_word_in_editable_and_readonly_source() {
                     },
                 ],
             );
+            if time == 0.2 {
+                assert!(
+                    egui::text_edit::TextEditState::load(&ctx, egui::Id::new("forma_source"))
+                        .unwrap()
+                        .cursor
+                        .char_range()
+                        .unwrap()
+                        .is_empty(),
+                    "first press is a caret placement"
+                );
+            }
+            if time == 0.28 {
+                let state =
+                    egui::text_edit::TextEditState::load(&ctx, egui::Id::new("forma_source"))
+                        .unwrap();
+                assert_eq!(
+                    state.cursor.char_range().unwrap().slice_str(&app.editor),
+                    "work",
+                    "second press should select immediately; editable={editable}"
+                );
+                frame(&mut app, 0.29, vec![]);
+                let state =
+                    egui::text_edit::TextEditState::load(&ctx, egui::Id::new("forma_source"))
+                        .unwrap();
+                assert_eq!(
+                    state.cursor.char_range().unwrap().slice_str(&app.editor),
+                    "work",
+                    "holding second press must retain selection; editable={editable}"
+                );
+            }
         }
         let state =
             egui::text_edit::TextEditState::load(&ctx, egui::Id::new("forma_source")).unwrap();
@@ -1269,9 +1302,50 @@ fn first_double_click_selects_word_in_editable_and_readonly_source() {
             "work",
             "editable={editable}"
         );
+        // A third press selects the line immediately, and holding/releasing keeps it.
+        frame(
+            &mut app,
+            0.34,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        let third = egui::text_edit::TextEditState::load(&ctx, egui::Id::new("forma_source"))
+            .unwrap()
+            .cursor
+            .char_range()
+            .unwrap();
+        assert!(third.slice_str(&app.editor).contains("name"));
+        frame(&mut app, 0.35, vec![]);
+        frame(
+            &mut app,
+            0.36,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert_eq!(
+            egui::text_edit::TextEditState::load(&ctx, egui::Id::new("forma_source"))
+                .unwrap()
+                .cursor
+                .char_range()
+                .unwrap(),
+            third
+        );
         if !editable {
+            let preview_before = app.editor.clone();
             frame(&mut app, 0.4, vec![egui::Event::Text("replacement".into())]);
-            assert_eq!(app.editor, original, "preview must remain readonly");
+            assert_eq!(app.editor, preview_before, "preview must remain readonly");
+            assert_eq!(
+                *app.full_text, original,
+                "full source must remain unchanged"
+            );
         }
     }
 }

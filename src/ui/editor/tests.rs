@@ -709,3 +709,71 @@ fn large_document_caret_lookup_timings() {
         });
     });
 }
+
+#[test]
+fn select_all_and_copy_preserve_viewport() {
+    let ctx = egui::Context::default();
+    let mut text = "{\"word\":123}\n".repeat(500);
+    let original = text.clone();
+    let mut cache = CodeCache::default();
+    let id = egui::Id::new("select_all_scroll");
+    for frame in 0..8 {
+        let events = match frame {
+            1 => vec![egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }],
+            2 => vec![egui::Event::Copy],
+            _ => vec![],
+        };
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(600.0, 400.0),
+                )),
+                time: Some(frame as f64 * 0.1),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ctx.memory_mut(|memory| memory.request_focus(id));
+                    let mut state =
+                        egui::text_edit::TextEditState::load(ctx, id).unwrap_or_default();
+                    state.external_undo = true;
+                    state.store(ctx, id);
+                    let scroll = egui::ScrollArea::vertical().show(ui, |ui| {
+                        let mut layouter = |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, width| {
+                            cache.layout_width(ui, buffer.as_str(), false, "", width)
+                        };
+                        egui::TextEdit::multiline(&mut text)
+                            .id(id)
+                            .layouter(&mut layouter)
+                            .show(ui)
+                    });
+                    assert_eq!(scroll.state.offset.y, 0.0, "frame {frame}");
+                    if frame >= 1 {
+                        assert_eq!(
+                            scroll
+                                .inner
+                                .state
+                                .cursor
+                                .char_range()
+                                .unwrap()
+                                .slice_str(&text),
+                            original
+                        );
+                    }
+                });
+            },
+        );
+        if frame == 2 {
+            assert!(output.platform_output.commands.iter().any(|command|
+                matches!(command, egui::OutputCommand::CopyText(copied) if copied == &original)));
+        }
+    }
+}

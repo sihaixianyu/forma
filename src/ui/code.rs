@@ -68,6 +68,82 @@ pub(super) fn layout_bounded_job(
     Arc::new(result)
 }
 
+/// Block endings are already cached with their newline bit. Unlike generic
+/// concat, do not clone a row's glyphs and mesh just to set that bit each edit.
+fn concat_cached_blocks(
+    job: Arc<egui::text::LayoutJob>,
+    blocks: &[Arc<egui::Galley>],
+    pixels_per_point: f32,
+) -> egui::Galley {
+    use egui::emath::GuiRounding as _;
+    // Let epaint preserve its private intrinsic-size metadata without copying meshes.
+    let summaries: Vec<_> = blocks
+        .iter()
+        .map(|block| {
+            let mut summary = (**block).clone();
+            summary.rows.clear();
+            Arc::new(summary)
+        })
+        .collect();
+    let mut result = egui::Galley::concat(job, &summaries, pixels_per_point);
+    result
+        .rows
+        .reserve(blocks.iter().map(|b| b.rows.len()).sum());
+    for block in blocks {
+        let offset = result.rect.height();
+        for row in &block.rows {
+            let mut row = row.clone();
+            row.pos.y += offset;
+            row.pos = row.pos.round_to_pixels(pixels_per_point);
+            result.mesh_bounds |= row.visuals.mesh_bounds.translate(row.pos.to_vec2());
+            result.rect |= egui::Rect::from_min_size(row.pos, row.size);
+            result.rows.push(row);
+        }
+    }
+    if result.job.round_output_to_gui {
+        let overflow = result.rect.width() > result.job.wrap.max_width + 1.0;
+        result.rect = result.rect.round_ui();
+        if !overflow {
+            result.rect.max.x = result
+                .rect
+                .max
+                .x
+                .min(result.rect.min.x + result.job.wrap.max_width)
+                .floor_ui();
+        }
+    }
+    result
+}
+
+/// Split only outside string tokens, retaining cross-line property lookahead.
+/// Invalid multiline strings stay in one block until their closing quote.
+fn layout_blocks(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut result = Vec::new();
+    let (mut start, mut quoted, mut escaped, mut last) = (0, false, false, 0u8);
+    for (at, byte) in text.bytes().enumerate() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+        } else if byte == b'"' {
+            quoted = true;
+        }
+        if byte == b'\n' && !quoted && last != b'"' {
+            result.push(start..at);
+            start = at + 1;
+        }
+        if !byte.is_ascii_whitespace() {
+            last = byte;
+        }
+    }
+    result.push(start..text.len());
+    result
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EditorTypography {
     pub font_size: f32,
@@ -241,6 +317,8 @@ pub struct CodeCache {
     font_epoch: Option<Arc<egui::Galley>>,
     aligned: Option<AlignedLayout>,
     search_rows: Option<SearchRowIndex>,
+    blocks: std::collections::HashMap<String, CodeCache>,
+    terminated: Option<Arc<egui::Galley>>,
 }
 
 struct SearchRowIndex {
@@ -474,9 +552,135 @@ impl CodeCache {
             {
                 return galley.clone();
             }
+            self.blocks.clear();
             let galley = layout_bounded_job(ui, job.clone());
             self.galley = Some(galley.clone());
             self.font_epoch = Some(epoch);
+            return galley;
+        }
+        if text.len() >= 16 * 1024 && text.split('\n').take(9).count() > 8 {
+            let ranges = layout_blocks(text);
+            if ranges.len() > 1 {
+                let mut previous = std::mem::take(&mut self.blocks);
+                let same_settings = self.dark == dark
+                    && self.typography == typography
+                    && self.pixels_per_point == ui.ctx().pixels_per_point()
+                    && self
+                        .font_epoch
+                        .as_ref()
+                        .is_some_and(|old| Arc::ptr_eq(old, &epoch));
+                let mut blocks: std::collections::HashMap<String, CodeCache> =
+                    std::collections::HashMap::new();
+                let mut galleys = Vec::with_capacity(ranges.len());
+                let mut job = egui::text::LayoutJob {
+                    text: text.to_owned(),
+                    ..Default::default()
+                };
+                job.wrap.max_width = width;
+                job.wrap.break_anywhere = true;
+                for range in ranges {
+                    let part = &text[range.clone()];
+                    let galley = if let Some(cache) = blocks.get(part) {
+                        cache.galley.as_ref().unwrap().clone()
+                    } else {
+                        let mut cache = previous.remove(part).unwrap_or_default();
+                        let reusable = same_settings
+                            && cache
+                                .job
+                                .as_ref()
+                                .is_some_and(|job| job.wrap.max_width == width);
+                        let galley = if reusable {
+                            cache.galley.as_ref().unwrap().clone()
+                        } else {
+                            cache.terminated = None;
+                            cache.layout_leaf(ui, part, dark, width, typography)
+                        };
+                        blocks.insert(part.to_owned(), cache);
+                        galley
+                    };
+                    let galley = if range.end < text.len() {
+                        let cache = blocks.get_mut(part).unwrap();
+                        cache
+                            .terminated
+                            .get_or_insert_with(|| {
+                                let mut terminated = (*galley).clone();
+                                if let Some(last) = terminated.rows.last_mut() {
+                                    Arc::make_mut(&mut last.row).ends_with_newline = true;
+                                }
+                                Arc::new(terminated)
+                            })
+                            .clone()
+                    } else {
+                        galley
+                    };
+                    for section in &galley.job.sections {
+                        let mut section = section.clone();
+                        section.byte_range = section.byte_range.start + range.start
+                            ..section.byte_range.end + range.start;
+                        job.sections.push(section);
+                    }
+                    // Include the omitted newline in syntax metadata as well as row offsets.
+                    if range.end < text.len() {
+                        if let Some(last) = job.sections.last_mut() {
+                            last.byte_range.end = range.end + 1;
+                        }
+                    }
+                    galleys.push(galley);
+                }
+                let galley = Arc::new(concat_cached_blocks(
+                    Arc::new(job.clone()),
+                    &galleys,
+                    ui.ctx().pixels_per_point(),
+                ));
+                self.blocks = blocks;
+                self.dark = dark;
+                self.pixels_per_point = ui.ctx().pixels_per_point();
+                self.typography = typography;
+                self.job = Some(job);
+                self.galley = Some(galley.clone());
+                self.font_epoch = Some(epoch);
+                return galley;
+            }
+        }
+        self.blocks.clear();
+        self.layout_leaf(ui, text, dark, width, typography)
+    }
+
+    fn layout_leaf(
+        &mut self,
+        ui: &egui::Ui,
+        text: &str,
+        dark: bool,
+        width: f32,
+        typography: EditorTypography,
+    ) -> Arc<egui::Galley> {
+        let epoch = ui.fonts_mut(|fonts| {
+            fonts.layout_no_wrap(
+                " ".into(),
+                FontId::monospace(typography.font_size),
+                Color32::TRANSPARENT,
+            )
+        });
+        if self.dark == dark
+            && self.typography == typography
+            && self.pixels_per_point == ui.ctx().pixels_per_point()
+            && self
+                .font_epoch
+                .as_ref()
+                .is_some_and(|old| Arc::ptr_eq(old, &epoch))
+            && let Some(job) = &self.job
+            && job.text == text
+        {
+            if job.wrap.max_width == width {
+                if let Some(galley) = &self.galley {
+                    return galley.clone();
+                }
+            }
+            let mut job = job.clone();
+            job.wrap.max_width = width;
+            let galley = layout_bounded_job(ui, job.clone());
+            self.job = Some(job);
+            self.galley = Some(galley.clone());
             return galley;
         }
         let _stage = forma::diagnostics::Stage::new("syntax_layout", text.len());
